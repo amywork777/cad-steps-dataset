@@ -343,72 +343,101 @@ class Client:
 
     # ---- Rollback operations (NEW for CAD-Steps) ----
 
-    def set_rollback_bar(self, did, wid, eid, feature_id=None, index=-1):
+    def set_rollback_bar(self, did, wid, eid, index=-1):
         """
         Set the rollback bar position in a part studio.
 
-        This uses the updateRollback API endpoint which moves the rollback bar
-        to just before the specified feature, effectively hiding all features
-        after that point and showing the model state at that construction step.
+        Uses the updateRollback API endpoint:
+        POST /api/partstudios/d/{did}/w/{wid}/e/{eid}/features/rollback
+
+        IMPORTANT: This requires WRITE access to the document. For public
+        documents you don't own, you must first copy the document using
+        copy_document().
 
         Args:
             - did (str): Document ID
             - wid (str): Workspace ID
             - eid (str): Element ID
-            - feature_id (str): Feature ID to roll back to (None = beginning)
-            - index (int): Feature index to roll back to (-1 = end/unroll)
+            - index (int): Feature index to roll back to.
+              0 = before all features (empty state)
+              N = after the Nth feature
+              -1 = end (all features visible)
 
         Returns:
             - requests.Response
         """
         body = {"rollbackIndex": index}
-        if feature_id is not None:
-            body["featureId"] = feature_id
-
         return self._api.request(
             'post',
             f'/api/partstudios/d/{did}/w/{wid}/e/{eid}/features/rollback',
             body=body
         )
 
-    def export_step(self, did, wid, eid, part_ids=None):
+    def copy_document(self, did, wid, name=None, is_public=True):
         """
-        Export STEP file from a part studio at its current state.
+        Copy an Onshape document to the authenticated user's account.
 
-        Uses the translation API to request STEP export.
+        Uses: POST /api/documents/{did}/workspaces/{wid}/copy
+
+        IMPORTANT: Free Onshape accounts can only create PUBLIC documents.
+        Set is_public=True (default) to avoid 409 errors on free accounts.
+
+        Args:
+            - did (str): Source document ID
+            - wid (str): Source workspace ID
+            - name (str): Name for the new document (default: auto-generated)
+            - is_public (bool): Whether the copy should be public (default: True)
+
+        Returns:
+            - dict: {'newDocumentId': str, 'newWorkspaceId': str, ...}
+            - None: if copy failed
+        """
+        body = {'isPublic': is_public}
+        if name:
+            body['newName'] = name
+
+        res = self._api.request(
+            'post',
+            f'/api/documents/{did}/workspaces/{wid}/copy',
+            body=body
+        )
+
+        if res.status_code != 200:
+            return None
+
+        return res.json()
+
+    def export_step(self, did, wid, eid):
+        """
+        Export STEP file from a part studio at its current rollback state.
+
+        Uses the createPartStudioTranslation endpoint which respects the
+        current rollback bar position.
 
         Args:
             - did (str): Document ID
             - wid (str): Workspace ID
             - eid (str): Element ID
-            - part_ids (list, optional): Specific part IDs to export
 
         Returns:
-            - bytes: STEP file content
+            - dict: Translation response with 'id' field for status polling
+            - None: if export failed
         """
-        # Use direct STEP export endpoint
-        req_headers = {
-            'Accept': 'application/vnd.onshape.v1+octet-stream'
-        }
-        query = {'units': 'meter'}
-        if part_ids:
-            query['partIds'] = ','.join(part_ids)
-
-        # Try the parts endpoint for STEP export
-        # First get parts list
-        parts_res = self._api.request(
-            'get',
-            f'/api/parts/d/{did}/w/{wid}/e/{eid}'
-        )
-
-        if parts_res.status_code != 200 or not parts_res.json():
+        # Check if there are any parts at current state
+        parts_res = self.get_parts(did, wid, eid)
+        if parts_res.status_code != 200:
+            return None
+        try:
+            parts = parts_res.json()
+            if not parts:
+                return None
+        except Exception:
             return None
 
-        # Request translation to STEP
+        # Request STEP translation (respects rollback bar position)
         body = {
             "formatName": "STEP",
-            "storeInDocument": False,
-            "linkDocumentWorkspaceId": wid
+            "storeInDocument": False
         }
         trans_res = self._api.request(
             'post',
@@ -426,7 +455,7 @@ class Client:
         return self._api.request('get', f'/api/translations/{translation_id}')
 
     def download_translated_document(self, did, doc_id):
-        """Download a translated document by its document ID."""
+        """Download a translated document by its external data ID."""
         req_headers = {
             'Accept': 'application/octet-stream'
         }
@@ -439,3 +468,11 @@ class Client:
     def get_parts(self, did, wid, eid):
         """Get list of parts in a part studio."""
         return self._api.request('get', f'/api/parts/d/{did}/w/{wid}/e/{eid}')
+
+    def get_elements(self, did, wid):
+        """Get list of elements (tabs) in a document workspace."""
+        return self._api.request('get', f'/api/documents/d/{did}/w/{wid}/elements')
+
+    def delete_document(self, did):
+        """Delete a document. Use to clean up copies after processing."""
+        return self._api.request('delete', f'/api/documents/{did}')
