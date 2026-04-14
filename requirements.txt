@@ -1,0 +1,3 @@
+onshape-client
+requests
+tqdm
