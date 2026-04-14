@@ -15,6 +15,41 @@ geometry_0 → "sketch rectangle" → geometry_1 → "extrude 10mm" → geometry
 
 This is the first dataset to capture intermediate STEP files at each construction step.
 
+## Research Motivation
+
+### Intermediate Supervision > Outcome-Only Supervision
+
+Other domains have shown that training on intermediate states dramatically improves model performance:
+
+**Math Reasoning**
+- GSM8K and MATH datasets include step-by-step solutions, not just final answers
+- Chain-of-thought prompting works because models learn intermediate reasoning
+- Process Reward Models (PRMs) that reward each step outperform Outcome Reward Models (ORMs) that only check final answers
+- See: "Let's Verify Step by Step" (OpenAI, 2023)
+
+**Robotics**
+- Trajectory/demonstration data captures (state, action, next_state) at every timestep
+- Imitation learning trains policies to reproduce expert behavior step-by-step
+- Google's RT-1/RT-2 trained on 130k real robot demonstrations
+- Diffusion Policy treats action trajectories as sequences to denoise
+
+**The Pattern**
+Both domains found that intermediate supervision produces stronger models than outcome-only supervision. CAD has the same structure - a sequence of operations transforming geometry - but no dataset captures intermediate geometry states.
+
+### Current CAD Training Approaches (and their limits)
+
+| Approach | Training Data | Limitation |
+|----------|--------------|------------|
+| DeepCAD | Operation sequences as tokens | No intermediate geometry |
+| VideoCAD | Screen recordings | Pixels, not geometry |
+| CAD-LLM | Sketch coordinates as code | Sketches only, no 3D |
+| BrepGen | Final B-rep only | No construction history |
+
+**CAD-Steps enables:**
+- Process reward models for CAD (reward each construction step)
+- Imitation learning on geometry trajectories
+- Step-by-step CAD reasoning models
+
 ## Dataset Structure
 
 ```
