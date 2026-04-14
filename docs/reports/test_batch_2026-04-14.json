@@ -1,0 +1,144 @@
+{
+  "results": [
+    {
+      "data_id": "00000352",
+      "url": "https://cad.onshape.com/documents/4185972a944744d8a7a0f2b4/w/d82d7eef8edf4342b7e49732/e/b6d6b562e8b64e7ea50d8325",
+      "status": "success",
+      "feature_count": 12,
+      "states_exported": 6,
+      "states_total": 12,
+      "step_files": 6,
+      "total_size_kb": 281.2,
+      "time_seconds": 40.7
+    },
+    {
+      "data_id": "00001272",
+      "url": "https://cad.onshape.com/documents/b53ece83d8964b44bbf1f8ed/w/6b2f1aad3c43402c82009c85/e/91cb13b68f164c2eba845ce6",
+      "status": "success",
+      "feature_count": 7,
+      "states_exported": 5,
+      "states_total": 7,
+      "step_files": 5,
+      "total_size_kb": 360.3,
+      "time_seconds": 50.3
+    },
+    {
+      "data_id": "00001616",
+      "url": "https://cad.onshape.com/documents/8c3b97c1382c43bab3eb1b48/w/43439c4e192347ecbf818421/e/63b575e3ac654545b571eee6",
+      "status": "success",
+      "feature_count": 10,
+      "states_exported": 9,
+      "states_total": 10,
+      "step_files": 9,
+      "total_size_kb": 352.1,
+      "time_seconds": 56.9
+    },
+    {
+      "data_id": "00000000",
+      "url": "https://cad.onshape.com/documents/290a9120f9f249a7a05cfe9c/w/f3d6fe4cfa4f4fd5a956c1f5/e/f83841055a93404a97c5ae79",
+      "status": "filtered",
+      "filter_reason": "error:Failed to get features: 404 {\n  \"message\" : \"Not found.\",\n  \"moreInfoUrl\" : \"\",\n  \"status\" : 404,\n  ",
+      "time_seconds": 0.16414356231689453
+    },
+    {
+      "data_id": "00000005",
+      "url": "https://cad.onshape.com/documents/d4fe04f0f5f84b52bd4f10e4/w/af184e4c3083411ba6f2afac/e/da756952509a495bb53a1aae",
+      "status": "filtered",
+      "filter_reason": "error:Failed to get features: 404 {\n  \"message\" : \"Not found.\",\n  \"moreInfoUrl\" : \"\",\n  \"status\" : 404,\n  ",
+      "time_seconds": 0.11124467849731445
+    },
+    {
+      "data_id": "00000007",
+      "url": "https://cad.onshape.com/documents/b33a147f86da49879455d286/w/bfdeeceb44a140cfae14fdd1/e/c26b2860c5d143a6a1414663",
+      "status": "success",
+      "feature_count": 2,
+      "states_exported": 1,
+      "states_total": 2,
+      "step_files": 1,
+      "total_size_kb": 4.4,
+      "time_seconds": 13.0
+    },
+    {
+      "data_id": "00000010",
+      "url": "https://cad.onshape.com/documents/b4b99d35e04b4277931f9a9c/w/cb0e0369017a4b1c8ec4a8ed/e/44bc1dcea2704499b5b3e091",
+      "status": "filtered",
+      "filter_reason": "error:Failed to get features: 404 {\n  \"message\" : \"Not found.\",\n  \"moreInfoUrl\" : \"\",\n  \"status\" : 404,\n  ",
+      "time_seconds": 0.11882352828979492
+    },
+    {
+      "data_id": "00000011",
+      "url": "https://cad.onshape.com/documents/e909f412cda24521865fac0f/w/6f8b499942424a50a940c5f6/e/50bc16864ff74c1280f3d506",
+      "status": "filtered",
+      "filter_reason": "unsupported_types:fillet,cPlane,revolve,sweep,shell,moveFace,booleanBodies,mirror",
+      "time_seconds": 0.5517361164093018
+    },
+    {
+      "data_id": "00000013",
+      "url": "https://cad.onshape.com/documents/c2f4d27f35ed4c138caf5c18/w/cfe522a1c8764448925b3c27/e/1194b43616f649a88d7abb19",
+      "status": "filtered",
+      "filter_reason": "unsupported_types:deleteBodies,importForeign",
+      "time_seconds": 0.9844131469726562
+    },
+    {
+      "data_id": "00000014",
+      "url": "https://cad.onshape.com/documents/5b1c2f8a8c6f40fdaae1e69d/w/fd9fe684325d4c0bb4d47656/e/5a811e4c224e4813833b8c34",
+      "status": "filtered",
+      "filter_reason": "unsupported_types:fillet,copyPart,cPlane,revolve,shell,booleanBodies,chamfer,mirror",
+      "time_seconds": 1.2672393321990967
+    },
+    {
+      "data_id": "00000036",
+      "url": "https://cad.onshape.com/documents/b169abf5f2444251b529c688/w/783429fd8e1740c586abf641/e/053658599dc543e58f87d790",
+      "status": "filtered",
+      "filter_reason": "unsupported_types:circularPattern,fillet,copyPart,cPlane,revolve,sweep,shell,moveFace,booleanBodies,chamfer",
+      "time_seconds": 1.1944782733917236
+    },
+    {
+      "data_id": "00000037",
+      "url": "https://cad.onshape.com/documents/c7d977f326364e35bb5b5d27/w/6d695530bcd04e278af09570/e/7a18e6ce3c7940c888cc467a",
+      "status": "filtered",
+      "filter_reason": "unsupported_types:circularPattern,fillet,cPlane,revolve,sweep,shell,booleanBodies,mirror",
+      "time_seconds": 1.826817274093628
+    },
+    {
+      "data_id": "00000046",
+      "url": "https://cad.onshape.com/documents/1a67c6032bbd479492910b39/w/2e84fdab0d9a425690b11483/e/05b45df32dcc429eb38849a2",
+      "status": "filtered",
+      "filter_reason": "unsupported_types:deleteFace,linearPattern",
+      "time_seconds": 1.2071850299835205
+    },
+    {
+      "data_id": "00000047",
+      "url": "https://cad.onshape.com/documents/1a67c6032bbd479492910b39/w/2e84fdab0d9a425690b11483/e/4d0b2ace97de47caa902a709",
+      "status": "filtered",
+      "filter_reason": "unsupported_types:circularPattern,sweep,linearPattern,cPlane",
+      "time_seconds": 0.39179039001464844
+    },
+    {
+      "data_id": "00000035",
+      "url": "https://cad.onshape.com/documents/6763f7e2f51a489caaf599f0/w/ae197a317c12480fbb17ca09/e/8c9312980b444a2c8770cee3",
+      "status": "filtered",
+      "filter_reason": "unsupported_types:circularPattern,fillet,mirror,booleanBodies",
+      "time_seconds": 0.379300594329834
+    }
+  ],
+  "summary": {
+    "total_models": 15,
+    "succeeded": 4,
+    "filtered": 11,
+    "failed": 0,
+    "errored": 0,
+    "total_time_seconds": 177.2,
+    "success_rate": 26.666666666666668,
+    "avg_time_success": 40.225,
+    "min_time_success": 13.0,
+    "max_time_success": 56.9,
+    "total_step_files": 21,
+    "total_output_kb": 998.0,
+    "total_states_exported": 21,
+    "filter_reasons": {
+      "error": 3,
+      "unsupported_types": 8
+    }
+  }
+}
