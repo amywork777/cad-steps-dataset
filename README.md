@@ -85,3 +85,12 @@ TBD
 ## License
 
 TBD
+
+## Infrastructure
+
+- **Budget**: $500/month (Vizcom research stipend)
+- **Data collection**: Runs on laptop (API-bound, not compute-bound)
+- **Training**: Rent GPU as needed (Lambda Labs, RunPod, Modal)
+- **Storage**: HuggingFace Datasets (free for public datasets)
+
+See [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) for details.
