@@ -143,7 +143,7 @@ def export_step_at_state(client, did, wid, eid, output_path):
     return True
 
 
-def export_all_states(client, url, output_dir, skip_sketches=True, cleanup=True):
+def export_all_states(client, url, output_dir, skip_sketches=True, cleanup=True, quiet=False):
     """
     Export STEP files at every rollback state of a model.
 
@@ -159,7 +159,11 @@ def export_all_states(client, url, output_dir, skip_sketches=True, cleanup=True)
         output_dir: Directory to save STEP files and metadata
         skip_sketches: If True, only export after extrude ops
         cleanup: If True, delete the copied document when done
+        quiet: If True, suppress most print output
     """
+    def log(msg):
+        if not quiet:
+            print(msg)
     did, wid, eid = parse_onshape_url(url)
     os.makedirs(output_dir, exist_ok=True)
 

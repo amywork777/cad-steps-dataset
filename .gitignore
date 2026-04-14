@@ -4,3 +4,11 @@ data/
 __pycache__/
 .env
 .env
+
+data/links/
+data/deepcad_raw/
+data/local_batch_*
+data/parallel_batch/
+*.7z
+*.tar
+*.tar.gz
