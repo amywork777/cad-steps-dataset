@@ -94,3 +94,17 @@ TBD
 - **Storage**: HuggingFace Datasets (free for public datasets)
 
 See [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) for details.
+
+## Tools
+
+### Data Collection
+- **Onshape API** + modified parser for rollback + STEP export
+- **CadQuery** for programmatic STEP handling
+
+### Synthetic Data Generation
+- **ForgeCAD** (forgecad.io) - code-first CAD in JS/TS, AI-friendly
+  - Scripts ARE the construction sequence
+  - Can generate diverse models with LLMs
+  - Export STEP at any point
+
+See [docs/TOOLS.md](docs/TOOLS.md) for full details.
