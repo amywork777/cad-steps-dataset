@@ -1,163 +1,209 @@
-# CAD-Steps: Intermediate State Dataset for Parametric CAD
+# CAD-Steps: Intermediate Geometry States for Parametric CAD Construction
 
-A large-scale dataset of CAD construction sequences with **intermediate geometry states** - capturing not just final models, but the geometry at each step of the construction process.
+**The first large-scale dataset of intermediate CAD geometry at every construction step.**
+
+CAD-Steps provides STEP geometry files at each stage of a parametric CAD model's construction, not just the final result. For a model built with 3 sketch-extrude pairs, we export 6 separate STEP files capturing the 2D sketch wireframes and the evolving 3D solid after each operation.
+
+This is analogous to showing your work in math, recording every frame of a robot's trajectory, or capturing intermediate compiler states during code execution. Existing CAD datasets give you the answer; CAD-Steps shows the process.
 
 ## Why This Matters
 
-Existing CAD datasets give you either:
-- Final geometry only (ABC Dataset)
-- Construction sequences as symbolic operations (DeepCAD)
+Intermediate supervision consistently outperforms outcome-only supervision across ML:
 
-But to train models that understand *how* to build CAD, you need:
-```
-geometry_0 → operation_1 → geometry_1 → operation_2 → geometry_2 → ...
-```
+| Domain | Outcome-Only | With Intermediate States | Key Paper |
+|--------|-------------|--------------------------|-----------|
+| **Math** | Final answer only | Step-by-step solutions; PRMs outperform ORMs by 12%+ | Lightman et al. "Let's Verify Step by Step" (2023) |
+| **Robotics** | Success/failure signal | Dense trajectory (state, action, next_state) at 10-50Hz | RT-2 (2023), Diffusion Policy (2023) |
+| **Code** | Final output | Execution traces, intermediate states | - |
+| **CAD** | Final .step file only | **CAD-Steps: geometry at every construction step** | **This work** |
 
-This is the first dataset to capture intermediate STEP geometry at each construction step.
+CAD has the same sequential structure as these domains, but until now, no dataset captured the intermediate geometry. DeepCAD provides symbolic operation sequences; the ABC Dataset provides final geometry; CAD-Steps bridges the gap with actual geometry at every step.
 
-## Research Motivation
+## What's In the Dataset
 
-### Intermediate Supervision > Outcome-Only Supervision
-
-Other domains have shown that training on intermediate states dramatically improves model performance:
-
-| Domain | Evidence |
-|--------|----------|
-| **Math** | Step-by-step solutions (GSM8K/MATH), Chain-of-thought, Process Reward Models (PRMs) outperform Outcome Reward Models (ORMs) - "Let's Verify Step by Step" (OpenAI, 2023) |
-| **Robotics** | Trajectory data captures (state, action, next_state) at every timestep. RT-1/RT-2 trained on 130k demonstrations. Diffusion Policy uses full action trajectories |
-| **Code** | Edit sequences and commit histories enable code evolution models. Intermediate compilation states provide richer supervision than final output alone |
-
-**The pattern**: intermediate supervision produces stronger models than outcome-only supervision. CAD has the same structure (a sequence of operations transforming geometry) but no existing dataset captures intermediate geometry states.
-
-### What CAD-Steps Enables
-
-- **Process reward models for CAD** - reward each construction step, not just final geometry
-- **Imitation learning on geometry trajectories** - (state, action, next_state) triples
-- **Step-by-step CAD reasoning** - chain-of-thought for design
-- **Next-state prediction** - given geometry + operation, predict resulting geometry
-- **Plan verification** - check if a proposed construction plan produces valid intermediate states
-
-## Dataset Structure
-
-Each model contains STEP geometry files at every construction step, plus metadata:
+Each model contains STEP files for every construction step, plus rich metadata:
 
 ```
-data/
-├── 00008841/
-│   ├── state_0001.step     # After first extrude
-│   ├── state_0002.step     # After second extrude
-│   ├── state_0004.step     # After third extrude (odd indices = sketch-only, skipped)
-│   ├── ...
-│   └── metadata.json       # Feature tree + export status per state
-├── 00007648/
-│   └── ...
-└── batch_results.json      # Aggregate statistics
+data/cad_steps_output/
+├── 00000007/
+│   ├── state_0000.step        # Sketch 1 (2D wireframe)
+│   ├── state_0001.step        # Extrude 1 (3D solid)
+│   └── metadata.json          # Operations, sketch geometry, parameters
+├── 00000061/
+│   ├── state_0000.step        # Sketch 1
+│   ├── state_0001.step        # Extrude 1
+│   ├── state_0002.step        # Sketch 2 (on existing solid)
+│   ├── state_0003.step        # Extrude 2 (cut/join)
+│   └── metadata.json
+└── ...
 ```
 
-### metadata.json format
+### State Types
+
+- **Sketch states**: 2D wireframe geometry (edges/wires on the sketch plane), exported as STEP containing curves. Captures the "drawing" phase of CAD.
+- **Extrude states**: 3D solid geometry after applying the extrusion (new body, join, cut, or intersect). Captures the cumulative solid.
+
+### metadata.json
+
 ```json
 {
-  "source_url": "https://cad.onshape.com/documents/.../e/...",
-  "features": [
-    {"featureId": "...", "featureType": "newSketch", "name": "Sketch 1"},
-    {"featureId": "...", "featureType": "extrude", "name": "Extrude 1"}
-  ],
+  "data_id": "00000061",
+  "num_sequence_steps": 4,
   "states": [
-    {"index": 0, "feature": {...}, "exported": false, "reason": "sketch-only"},
-    {"index": 1, "feature": {...}, "exported": true, "step_file": "state_0001.step"}
+    {
+      "index": 0,
+      "type": "sketch",
+      "name": "Sketch 1",
+      "step_file": "state_0000.step",
+      "sketch_plane": {
+        "origin": [0, 0, 0],
+        "normal": [0, 0, 1],
+        "x_axis": [1, 0, 0]
+      },
+      "profiles": [
+        {
+          "id": "JGC",
+          "loops": [
+            {
+              "is_outer": true,
+              "curves": [
+                {"type": "Line3D", "start": [0, 0, 0], "end": [0.025, 0, 0]},
+                {"type": "Arc3D", "start": [0.025, 0, 0], "end": [0, -0.025, 0], "center": [0, 0, 0], "radius": 0.025}
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "type": "extrude",
+      "name": "Extrude 1",
+      "step_file": "state_0001.step",
+      "operation": "NewBodyFeatureOperation",
+      "extent_type": "OneSideFeatureExtentType",
+      "extent_one": 0.0127,
+      "profiles_used": ["JGC"]
+    }
   ]
 }
 ```
 
-## Data Pipeline
+## Dataset Statistics (200-model pilot)
 
-### Approach 1: Onshape API (current proof-of-concept)
-For each model: copy document → rollback feature tree → export STEP at each state → cleanup.
-Limited by Onshape free API rate limits (~15 exports/day).
+| Metric | Value |
+|--------|-------|
+| Models processed | 200 |
+| Success rate | 100% |
+| Total STEP files | 395 |
+| Total size | 32.8 MB |
+| Processing time (8 workers) | 1.5 seconds |
+| Avg states per model | ~2.0 |
+| Avg time per model | 7.7 ms |
 
-### Approach 2: Local reconstruction (in development)
-Parse DeepCAD's processed JSON sequences and reconstruct geometry using Open Cascade (cadquery/build123d).
-No API limits; target 178K models in <24 hours.
+### Full Dataset Projections (178,238 models)
 
-## Progress
+| Metric | Estimate |
+|--------|----------|
+| Total STEP files | ~352,000 |
+| Total size | ~29 GB |
+| Processing time (8 workers) | ~3 minutes |
+| Operations covered | Sketch, Extrude (New/Join/Cut/Intersect) |
 
-| Phase | Status | Notes |
-|-------|--------|-------|
-| Proof of concept (15 models) | ✅ Done | 86.7% success rate on DeepCAD pre-filtered models |
-| Parallel runner | ✅ Done | ThreadPoolExecutor with rate limiting |
-| 500K ABC links downloaded | ✅ Done | 50 YAML files × 10K models |
-| Rate limit analysis | ✅ Done | Free tier too slow; pivoting to local reconstruction |
-| Local reconstruction pipeline | 🔄 Next | cadquery/build123d from DeepCAD JSON |
-| Full 178K extraction | ⏳ Planned | Depends on local pipeline |
-| HuggingFace upload | ⏳ Planned | After extraction complete |
+## Data Sources
 
-## Sources
+| Source | Models | Included | Notes |
+|--------|--------|----------|-------|
+| DeepCAD (sketch+extrude subset) | 178,238 | Primary | Pre-filtered, JSON sequences available |
+| ABC Dataset | ~1M | Planned | ~10% are sketch+extrude; rest use unsupported ops |
+| Fusion 360 Gallery | 8,625 | Planned | Richer operations (fillet, chamfer, etc.) |
 
-| Source | Models | Type | Status |
-|--------|--------|------|--------|
-| DeepCAD (sketch+extrude subset) | ~178K | Pre-filtered, verified | 🔄 Primary target |
-| ABC Dataset (full) | ~1M | Unfiltered (~10% sketch+extrude) | ⏳ Later |
-| Fusion 360 Gallery | ~20K | Diverse operations | ⏳ Later |
-
-## Getting Started
+## Quick Start
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# Clone
+git clone https://github.com/amywork777/cad-steps-dataset.git
+cd cad-steps-dataset
 
-# Test the Onshape export pipeline (requires API credentials)
+# Install dependencies (requires Python 3.10+)
+pip install cadquery numpy
+
+# Download DeepCAD source data (~185 MB)
+cd data && mkdir -p deepcad_raw && cd deepcad_raw
+curl -L http://www.cs.columbia.edu/cg/deepcad/data.tar | tar x
+cd ../..
+
+# Test on 5 models
 cd code
-python3 export_steps.py --test
+python3 local_export.py --test
 
-# Run a batch (with rate limiting)
-python3 run_parallel_batch.py \
-    --link_file ../data/abc_links/objects_0000.yml \
-    --output_dir ../data/batch_test \
-    --limit 20 --workers 2 --rate 0.3
-```
+# Run on 200 models with 8 workers
+python3 run_local_batch.py --count 200 --workers 8
 
-### API Credentials
-Create `code/creds.json`:
-```json
-{
-    "https://cad.onshape.com": {
-        "access_key": "YOUR_ACCESS_KEY",
-        "secret_key": "YOUR_SECRET_KEY"
-    }
-}
+# Run on everything
+python3 run_local_batch.py --all --workers 10
 ```
 
 ## Repository Structure
 
 ```
 ├── code/
-│   ├── export_steps.py          # Core: rollback + STEP export pipeline
-│   ├── run_parallel_batch.py    # Parallel batch runner with rate limiting
-│   ├── run_deepcad_batch.py     # Sequential batch (original test)
-│   ├── onshape_api/             # Onshape REST API client (Python 3 port)
-│   └── parser.py                # DeepCAD feature parser
+│   ├── local_export.py          # Core: replay DeepCAD JSON → STEP at each step
+│   ├── run_local_batch.py       # Parallel batch runner with checkpointing
+│   ├── cadlib/                  # DeepCAD's CAD parsing library (from ChrisWu1997/DeepCAD)
+│   ├── export_steps.py          # Onshape API pipeline (deprecated, rate-limited)
+│   ├── run_parallel_batch.py    # Onshape API batch runner (deprecated)
+│   └── onshape_api/             # Onshape REST API client (Python 3 port)
 ├── data/
-│   ├── abc_links/               # 500K model URLs (50 YAML files)
-│   └── deepcad_batch/           # Test batch output (13 models, 38 STEP files)
+│   ├── deepcad_raw/             # DeepCAD JSON source (178k models)
+│   └── cad_steps_output/        # Generated STEP files + metadata
 ├── docs/
-│   ├── METHODOLOGY.md
-│   ├── ROADMAP.md
-│   ├── INFRASTRUCTURE.md
-│   └── reports/                 # Test batch reports
+│   ├── METHODOLOGY.md           # Technical approach and pipeline details
+│   ├── PAPER_NOTES.md           # Research paper planning and related work
+│   ├── EXPERIMENT_LOG.md        # Chronological experiment log
+│   ├── ROADMAP.md               # Project status and next steps
+│   └── reports/                 # Batch test reports
 └── README.md
 ```
 
-## Key Findings
+## The Journey (TL;DR)
 
-- **Onshape free API**: ~1000 calls/day rolling limit. Each model export costs ~20 calls. Not viable for 178K+ models.
-- **ABC dataset composition**: ~30% deleted (404), ~60% use unsupported ops, ~10% sketch+extrude only.
-- **DeepCAD pre-filtered**: 86.7% export success rate, avg 23s/model, avg 2.5 states/model.
-- **Local reconstruction**: Best path forward. No rate limits, 100x faster.
+We initially built a full Onshape API pipeline to extract intermediate STEP geometry by rolling back the feature tree. After porting the Python 2 onshape-cad-parser to Python 3 and getting it working, we discovered Onshape's API rate limits make large-scale extraction impossible: even an Enterprise plan (10k calls/year) would take **392 years** for 178k models. Their ToS also prohibits data mining public documents.
+
+We pivoted to a local pipeline using OpenCascade (via CadQuery/OCP). By replaying DeepCAD's pre-parsed JSON construction sequences locally, we achieved **885x speedup** (7.7ms vs 23s per model), **100% success rate**, and **zero API dependency**. The full 178k dataset can be generated in ~3 minutes.
+
+See [docs/EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md) for the full chronological story, and [docs/METHODOLOGY.md](docs/METHODOLOGY.md) for technical details.
+
+## What CAD-Steps Enables
+
+- **Process reward models for CAD**: Score each construction step, not just the final geometry
+- **Imitation learning on geometry trajectories**: (state, action, next_state) triples for sequential CAD
+- **Step-level verification**: Detect errors at the step where they occur
+- **Next-state prediction**: Given current geometry + operation parameters, predict the resulting geometry
+- **Inverse CAD**: Given before/after geometry, infer what operation was applied
+- **Sketch understanding**: 2D wireframe geometry captures the "thinking" phase before 3D operations
+
+## Known Limitations
+
+- **Sketch+extrude only**: DeepCAD's data is limited to sketch and extrude operations. No fillets, chamfers, revolves, patterns, or other advanced features.
+- **No parametric constraints**: DeepCAD's JSON contains resolved geometry (coordinates) but not the original design-intent constraints (concentric, parallel, equal-length, etc.). This is a significant limitation documented in [docs/PAPER_NOTES.md](docs/PAPER_NOTES.md).
+- **Reconstructed geometry**: Shapes are rebuilt from parsed parameters, not extracted from the original Onshape models. Minor numerical differences are possible.
 
 ## Citation
 
-TBD
+```bibtex
+@misc{zhou2026cadsteps,
+  title={CAD-Steps: A Large-Scale Dataset of Intermediate CAD Construction States},
+  author={Zhou, Amy},
+  year={2026},
+  howpublished={\url{https://github.com/amywork777/cad-steps-dataset}}
+}
+```
+
+## Acknowledgments
+
+This dataset builds on [DeepCAD](https://github.com/ChrisWu1997/DeepCAD) by Wu et al. (ICCV 2021) for source data and CAD parsing, and uses [OpenCASCADE](https://dev.opencascade.org/) via [CadQuery](https://github.com/CadQuery/cadquery) for geometry reconstruction and STEP export.
 
 ## License
 
-TBD
+Dataset: CC-BY-4.0. Code: MIT.

@@ -1,70 +1,108 @@
 # Roadmap
 
-## Phase 1: Setup & Proof of Concept (Week 1-2) ✅ COMPLETE
-- [x] Create GitHub repo
-- [x] Document research motivation
-- [x] Plan infrastructure
-- [x] Get Onshape API credentials
-- [x] Fork onshape-cad-parser
-- [x] Test rollback + STEP export on 1 model (Onshape API)
-- [x] Test on 15 models (Onshape API) - 86.7% success
-- [x] **CRITICAL FINDING: Onshape API rate limits make large-scale extraction impossible**
-  - Free plan: ~300 API calls hit the rate limit
-  - Rate limit lockout: 20+ hours
-  - Even Enterprise (10k/year) = only ~454 models/year
-  - 178k models would require 392+ years
-  - ToS prohibits data mining public documents
-- [x] **PIVOT: Built local pipeline using OpenCascade (CadQuery/OCP)**
-  - Uses DeepCAD's pre-parsed JSON data (178k models)
-  - Replays construction sequences locally with OCC
-  - Exports STEP at each intermediate state
-  - 100% success rate on 100-model batch
-  - 0.026 seconds/model (vs ~23 seconds on Onshape API)
-  - Full 178k dataset: ~1.3 hours sequential, ~8 min with 10 workers
-  - Estimated dataset size: ~39 GB
+## Phase 1: Setup and Proof of Concept ✅ COMPLETE (Week 1)
 
-## Phase 2: Full DeepCAD Extraction (Week 3-4) - IN PROGRESS
-- [x] Download full DeepCAD data (178k models, cad_json.tar.gz)
-- [x] Build parallel local pipeline (run_parallel_local.py)
-- [ ] Run on full 178k DeepCAD dataset
-- [ ] Handle failures, log statistics
-- [ ] Validate output quality (compare with Onshape exports)
-- [ ] Upload to HuggingFace Datasets
+- [x] Create GitHub repository and documentation structure
+- [x] Document research motivation (intermediate supervision from math/robotics)
+- [x] Plan infrastructure (compute budget, storage, GPU rental)
+- [x] Obtain Onshape API credentials
+- [x] Port `onshape-cad-parser` from Python 2 to Python 3
+- [x] Build Onshape API pipeline (copy → rollback → STEP export → cleanup)
+- [x] Test on 15 DeepCAD models via Onshape API
+  - 86.7% success rate (13/15), avg 23s/model, 21 STEP files
+- [x] Discover rate limit wall (HTTP 429 after ~300 calls, 20-hour lockout)
+- [x] Full rate limit analysis (Enterprise plan = 392 years for 178K models)
+- [x] Document Onshape API negative result
 
-## Phase 3: Baseline Experiments (Week 5-8)
-- [ ] Define evaluation metrics
-- [ ] Train simple baseline (operation prediction from geometry)
-- [ ] Compare with/without intermediate geometry
+## Phase 2: Local Pipeline Development ✅ COMPLETE (Week 1-2)
+
+- [x] Download DeepCAD pre-parsed JSON data (178K models, 185 MB compressed)
+- [x] Build local reconstruction pipeline using OpenCascade (CadQuery/OCP)
+  - Sketch → Face → Extrude → Boolean → STEP export at each step
+- [x] Validate on 200-model batch
+  - 100% success rate, 395 STEP files, 32.8 MB, 1.5 seconds (8 workers)
+- [x] Implement parallelization with ProcessPoolExecutor
+- [x] Add checkpointing (skip already-processed models)
+- [x] Performance benchmarking: 7.7 ms/model (885× faster than Onshape API)
+- [x] Full dataset projections: ~3 minutes with 8 workers, ~29 GB, ~352K files
+
+## Phase 3: Full Dataset Extraction — IN PROGRESS (Week 3)
+
+- [x] Download full DeepCAD data (178K models across 100 bucket directories)
+- [x] Validate local pipeline at 200-model scale
+- [ ] Run on full 178K DeepCAD dataset (~3 minutes with 8 workers)
+- [ ] Compute dataset statistics (operation distributions, file sizes, failure analysis)
+- [ ] Quality validation (compare local exports with Onshape API exports)
+- [ ] Upload to HuggingFace Datasets (public, CC BY 4.0)
+
+## Phase 4: Paper and Documentation (Week 4-6)
+
+- [x] Draft paper outline (`docs/PAPER_OUTLINE.md`)
+- [x] Write detailed methodology (`docs/METHODOLOGY.md`)
+- [x] Document Onshape analysis as negative result (`docs/ONSHAPE_ANALYSIS.md`)
+- [ ] Generate dataset statistics figures (histograms, distributions)
+- [ ] Create example visualizations (intermediate state sequences)
+- [ ] Write full paper draft (target: arXiv preprint)
+
+## Phase 5: Baseline Experiments (Week 6-10)
+
+- [ ] Define evaluation metrics (Chamfer distance, IoU, operation accuracy)
+- [ ] Implement geometry representations (voxelized, point cloud)
+- [ ] Train next-state prediction baseline
+- [ ] Train operation prediction (inverse modeling) baseline
+- [ ] Compare with/without intermediate geometry supervision
+- [ ] Ablation studies
 - [ ] Document results
 
-## Phase 4: Paper (Week 9-12)
-- [ ] Write methodology section
-- [ ] Write experiments section
-- [ ] Create figures
-- [ ] Submit to venue (CVPR/ICCV workshop, or arxiv)
+## Phase 6: Release and Extension (Week 10-14)
 
-## Phase 5: Scale to ABC (Optional)
-- [ ] Download full ABC dataset links (1M models)
-- [ ] Adapt pipeline for ABC models (need to filter for sketch+extrude)
-- [ ] Run at scale
-- [ ] Release v2 of dataset
+- [ ] Final paper submission (venue TBD: CVPR workshop, ICCV, or arXiv)
+- [ ] Release pre-trained baseline models on HuggingFace
+- [ ] Extend to Fusion 360 Gallery (~20K models, richer operations)
+- [ ] Community engagement (Reddit r/MachineLearning, Twitter, HuggingFace)
 
-## Technical Notes
+---
 
-### API vs Local Pipeline Comparison
+## Key Metrics
 
-| Metric | Onshape API | Local (OCC) |
-|--------|------------|-------------|
-| Time/model | ~23s | ~0.026s |
-| API calls | ~22/model | 0 |
-| Rate limits | ~300/day (free) | None |
-| Cost | Paid plans needed | Free |
-| 178k models | 392+ years | ~1.3 hours |
-| Dependencies | Internet, Onshape account | Python, CadQuery |
-| Data quality | Original geometry | Reconstructed from parsed JSON |
+### Pipeline Performance Comparison
 
-### Known Limitations of Local Pipeline
-- Only supports sketch+extrude operations (same as DeepCAD)
-- Geometry is reconstructed from parsed parameters, not original Onshape data
-- Some models fail on boolean operations (e.g., self-intersecting geometry)
-- Some models have 0 exportable states (empty operations list)
+| Metric | Onshape API | Local (OCC) | Improvement |
+|--------|------------|-------------|-------------|
+| Time/model | 23,000 ms | 7.7 ms | 2,987× |
+| API calls/model | 22 | 0 | ∞ |
+| Rate limited | Yes (20h lockout) | No | — |
+| 178K models | 392 years | ~3 minutes | ~10⁸× |
+| Dependencies | Internet + API keys | Python + CadQuery | Simpler |
+| Cost | Enterprise plan needed | Free | ∞ |
+
+### 200-Model Validation Results
+
+| Metric | Value |
+|--------|-------|
+| Success rate | 100% (200/200) |
+| STEP files generated | 395 |
+| Total size | 32.8 MB |
+| Wall clock time | 1.54 seconds |
+| Workers | 8 |
+| Avg files/model | 1.98 |
+| Avg size/model | 163.8 KB |
+
+### Full Dataset Projections
+
+| Metric | Estimate |
+|--------|----------|
+| Total models | 178,238 |
+| STEP files | ~352,000 |
+| Total size | ~29 GB |
+| Processing time (8 workers) | ~3 minutes |
+| Processing time (sequential) | ~23 minutes |
+
+---
+
+## Known Limitations
+
+1. **Sketch-and-extrude only**: No fillets, chamfers, revolves, patterns (inherited from DeepCAD)
+2. **Reconstructed geometry**: OpenCascade reconstruction, not original Onshape exports
+3. **Normalized coordinates**: DeepCAD uses normalized dimensions
+4. **Some failure modes**: Degenerate sketches, boolean edge cases (logged in metadata)
