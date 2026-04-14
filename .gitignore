@@ -1,14 +1,18 @@
+# Data (too large for git)
 data/
 *.step
-*.pyc
-__pycache__/
-.env
-.env
-
-data/links/
-data/deepcad_raw/
-data/local_batch_*
-data/parallel_batch/
 *.7z
 *.tar
 *.tar.gz
+
+# Python
+*.pyc
+__pycache__/
+.venv/
+
+# Credentials
+.env
+creds.json
+
+# OS
+.DS_Store

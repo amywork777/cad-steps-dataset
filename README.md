@@ -10,10 +10,10 @@ Existing CAD datasets give you either:
 
 But to train models that understand *how* to build CAD, you need:
 ```
-geometry_0 → "sketch rectangle" → geometry_1 → "extrude 10mm" → geometry_2 → ...
+geometry_0 → operation_1 → geometry_1 → operation_2 → geometry_2 → ...
 ```
 
-This is the first dataset to capture intermediate STEP files at each construction step.
+This is the first dataset to capture intermediate STEP geometry at each construction step.
 
 ## Research Motivation
 
@@ -21,62 +21,138 @@ This is the first dataset to capture intermediate STEP files at each constructio
 
 Other domains have shown that training on intermediate states dramatically improves model performance:
 
-**Math Reasoning**
-- GSM8K and MATH datasets include step-by-step solutions, not just final answers
-- Chain-of-thought prompting works because models learn intermediate reasoning
-- Process Reward Models (PRMs) that reward each step outperform Outcome Reward Models (ORMs) that only check final answers
-- See: "Let's Verify Step by Step" (OpenAI, 2023)
+| Domain | Evidence |
+|--------|----------|
+| **Math** | Step-by-step solutions (GSM8K/MATH), Chain-of-thought, Process Reward Models (PRMs) outperform Outcome Reward Models (ORMs) - "Let's Verify Step by Step" (OpenAI, 2023) |
+| **Robotics** | Trajectory data captures (state, action, next_state) at every timestep. RT-1/RT-2 trained on 130k demonstrations. Diffusion Policy uses full action trajectories |
+| **Code** | Edit sequences and commit histories enable code evolution models. Intermediate compilation states provide richer supervision than final output alone |
 
-**Robotics**
-- Trajectory/demonstration data captures (state, action, next_state) at every timestep
-- Imitation learning trains policies to reproduce expert behavior step-by-step
-- Google's RT-1/RT-2 trained on 130k real robot demonstrations
-- Diffusion Policy treats action trajectories as sequences to denoise
+**The pattern**: intermediate supervision produces stronger models than outcome-only supervision. CAD has the same structure (a sequence of operations transforming geometry) but no existing dataset captures intermediate geometry states.
 
-**The Pattern**
-Both domains found that intermediate supervision produces stronger models than outcome-only supervision. CAD has the same structure - a sequence of operations transforming geometry - but no dataset captures intermediate geometry states.
+### What CAD-Steps Enables
 
-### Current CAD Training Approaches (and their limits)
-
-| Approach | Training Data | Limitation |
-|----------|--------------|------------|
-| DeepCAD | Operation sequences as tokens | No intermediate geometry |
-| VideoCAD | Screen recordings | Pixels, not geometry |
-| CAD-LLM | Sketch coordinates as code | Sketches only, no 3D |
-| BrepGen | Final B-rep only | No construction history |
-
-**CAD-Steps enables:**
-- Process reward models for CAD (reward each construction step)
-- Imitation learning on geometry trajectories
-- Step-by-step CAD reasoning models
+- **Process reward models for CAD** - reward each construction step, not just final geometry
+- **Imitation learning on geometry trajectories** - (state, action, next_state) triples
+- **Step-by-step CAD reasoning** - chain-of-thought for design
+- **Next-state prediction** - given geometry + operation, predict resulting geometry
+- **Plan verification** - check if a proposed construction plan produces valid intermediate states
 
 ## Dataset Structure
 
+Each model contains STEP geometry files at every construction step, plus metadata:
+
 ```
 data/
-├── model_00001/
-│   ├── step_00.step      # Initial state
-│   ├── step_01.step      # After first operation
-│   ├── step_02.step      # After second operation
-│   └── sequence.json     # Operations + metadata
-├── model_00002/
+├── 00008841/
+│   ├── state_0001.step     # After first extrude
+│   ├── state_0002.step     # After second extrude
+│   ├── state_0004.step     # After third extrude (odd indices = sketch-only, skipped)
+│   ├── ...
+│   └── metadata.json       # Feature tree + export status per state
+├── 00007648/
 │   └── ...
+└── batch_results.json      # Aggregate statistics
 ```
+
+### metadata.json format
+```json
+{
+  "source_url": "https://cad.onshape.com/documents/.../e/...",
+  "features": [
+    {"featureId": "...", "featureType": "newSketch", "name": "Sketch 1"},
+    {"featureId": "...", "featureType": "extrude", "name": "Extrude 1"}
+  ],
+  "states": [
+    {"index": 0, "feature": {...}, "exported": false, "reason": "sketch-only"},
+    {"index": 1, "feature": {...}, "exported": true, "step_file": "state_0001.step"}
+  ]
+}
+```
+
+## Data Pipeline
+
+### Approach 1: Onshape API (current proof-of-concept)
+For each model: copy document → rollback feature tree → export STEP at each state → cleanup.
+Limited by Onshape free API rate limits (~15 exports/day).
+
+### Approach 2: Local reconstruction (in development)
+Parse DeepCAD's processed JSON sequences and reconstruct geometry using Open Cascade (cadquery/build123d).
+No API limits; target 178K models in <24 hours.
+
+## Progress
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Proof of concept (15 models) | ✅ Done | 86.7% success rate on DeepCAD pre-filtered models |
+| Parallel runner | ✅ Done | ThreadPoolExecutor with rate limiting |
+| 500K ABC links downloaded | ✅ Done | 50 YAML files × 10K models |
+| Rate limit analysis | ✅ Done | Free tier too slow; pivoting to local reconstruction |
+| Local reconstruction pipeline | 🔄 Next | cadquery/build123d from DeepCAD JSON |
+| Full 178K extraction | ⏳ Planned | Depends on local pipeline |
+| HuggingFace upload | ⏳ Planned | After extraction complete |
 
 ## Sources
 
-| Source | Models | Status |
-|--------|--------|--------|
-| DeepCAD (Onshape) | 178k | 🔄 In Progress |
-| ABC Dataset | 1M | ⏳ Planned |
-| Fusion 360 Gallery | ~20k | ⏳ Planned |
+| Source | Models | Type | Status |
+|--------|--------|------|--------|
+| DeepCAD (sketch+extrude subset) | ~178K | Pre-filtered, verified | 🔄 Primary target |
+| ABC Dataset (full) | ~1M | Unfiltered (~10% sketch+extrude) | ⏳ Later |
+| Fusion 360 Gallery | ~20K | Diverse operations | ⏳ Later |
 
 ## Getting Started
 
 ```bash
+# Install dependencies
 pip install -r requirements.txt
-python scripts/parse_onshape.py --input links.txt --output data/
+
+# Test the Onshape export pipeline (requires API credentials)
+cd code
+python3 export_steps.py --test
+
+# Run a batch (with rate limiting)
+python3 run_parallel_batch.py \
+    --link_file ../data/abc_links/objects_0000.yml \
+    --output_dir ../data/batch_test \
+    --limit 20 --workers 2 --rate 0.3
 ```
+
+### API Credentials
+Create `code/creds.json`:
+```json
+{
+    "https://cad.onshape.com": {
+        "access_key": "YOUR_ACCESS_KEY",
+        "secret_key": "YOUR_SECRET_KEY"
+    }
+}
+```
+
+## Repository Structure
+
+```
+├── code/
+│   ├── export_steps.py          # Core: rollback + STEP export pipeline
+│   ├── run_parallel_batch.py    # Parallel batch runner with rate limiting
+│   ├── run_deepcad_batch.py     # Sequential batch (original test)
+│   ├── onshape_api/             # Onshape REST API client (Python 3 port)
+│   └── parser.py                # DeepCAD feature parser
+├── data/
+│   ├── abc_links/               # 500K model URLs (50 YAML files)
+│   └── deepcad_batch/           # Test batch output (13 models, 38 STEP files)
+├── docs/
+│   ├── METHODOLOGY.md
+│   ├── ROADMAP.md
+│   ├── INFRASTRUCTURE.md
+│   └── reports/                 # Test batch reports
+└── README.md
+```
+
+## Key Findings
+
+- **Onshape free API**: ~1000 calls/day rolling limit. Each model export costs ~20 calls. Not viable for 178K+ models.
+- **ABC dataset composition**: ~30% deleted (404), ~60% use unsupported ops, ~10% sketch+extrude only.
+- **DeepCAD pre-filtered**: 86.7% export success rate, avg 23s/model, avg 2.5 states/model.
+- **Local reconstruction**: Best path forward. No rate limits, 100x faster.
 
 ## Citation
 
@@ -85,26 +161,3 @@ TBD
 ## License
 
 TBD
-
-## Infrastructure
-
-- **Budget**: $500/month (Vizcom research stipend)
-- **Data collection**: Runs on laptop (API-bound, not compute-bound)
-- **Training**: Rent GPU as needed (Lambda Labs, RunPod, Modal)
-- **Storage**: HuggingFace Datasets (free for public datasets)
-
-See [docs/INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md) for details.
-
-## Tools
-
-### Data Collection
-- **Onshape API** + modified parser for rollback + STEP export
-- **CadQuery** for programmatic STEP handling
-
-### Synthetic Data Generation
-- **ForgeCAD** (forgecad.io) - code-first CAD in JS/TS, AI-friendly
-  - Scripts ARE the construction sequence
-  - Can generate diverse models with LLMs
-  - Export STEP at any point
-
-See [docs/TOOLS.md](docs/TOOLS.md) for full details.
