@@ -1,366 +1,216 @@
 # Methodology
 
-## 1. Problem Statement
+## Problem Statement
 
-Given a CAD construction sequence `S = [op₁, op₂, ..., opₙ]` and a geometric kernel, produce intermediate geometry files `[G₁, G₂, ..., Gₙ]` where `Gᵢ` is the cumulative solid geometry after applying operations `op₁` through `opᵢ`.
-
-The dataset consists of tuples `(Gᵢ, opᵢ₊₁, Gᵢ₊₁)` for all valid transitions, enabling supervised learning on geometric state transitions.
-
----
-
-## 2. Data Source: DeepCAD
-
-### 2.1 Overview
-
-We build on the DeepCAD dataset (Wu et al., ICCV 2021), which contains **178,238 parametric CAD models** with full construction sequences. The models were originally collected from public Onshape documents and pre-filtered to include only sketch-and-extrude operations.
-
-### 2.2 Data Format
-
-Each model is stored as a JSON file with the following structure:
-
-```json
-{
-  "sequence": [
-    {
-      "type": "ExtrudeFeature",
-      "operation": 0,           // 0=NewBody, 1=Join, 2=Cut, 3=Intersect
-      "extent_type": 0,         // 0=OneSide, 1=Symmetric, 2=TwoSides
-      "extent_one": 0.209,      // Extrusion distance (normalized)
-      "extent_two": 0.0,        // Second distance (for TwoSides)
-      "sketch": {
-        "profiles": [{
-          "loops": [{
-            "curves": [
-              {"type": "Line", "start": [0.1, 0.2], "end": [0.5, 0.2]},
-              {"type": "Arc", "start": [0.5, 0.2], "mid": [0.6, 0.5], "end": [0.5, 0.8]},
-              {"type": "Line", "start": [0.5, 0.8], "end": [0.1, 0.8]},
-              {"type": "Line", "start": [0.1, 0.8], "end": [0.1, 0.2]}
-            ]
-          }]
-        }],
-        "plane": {
-          "origin": [0, 0, 0],
-          "normal": [0, 0, 1],
-          "x_axis": [1, 0, 0]
-        }
-      }
-    }
-    // ... more operations
-  ]
-}
-```
-
-### 2.3 DeepCAD's Library (`cadlib`)
-
-We use DeepCAD's own `cadlib` Python package to parse JSON into structured objects:
-- `CADSequence`: ordered list of `Extrude` operations
-- `Extrude`: sketch profile + extrusion parameters + boolean operation type
-- `Profile` → `Loop` → `Curve` (Line, Arc, Circle): 2D sketch geometry
-- `CoordSystem`: sketch plane definition (origin, normal, x-axis)
-- Normalization: sketch coordinates are normalized to [0, 1]; `denormalize()` restores physical dimensions
-
-### 2.4 Data Organization
-
-DeepCAD distributes its 178K models across 100 bucket directories:
-```
-data/cad_json/
-├── 0000/     # ~1,800 JSON files
-├── 0001/     # ~1,800 JSON files
-├── ...
-└── 0099/     # ~1,800 JSON files
-```
-
-Total compressed size: ~185 MB (`cad_json.tar.gz`).
-
----
-
-## 3. Extraction Pipeline
-
-### 3.1 Approach 1: Onshape API (Proof of Concept)
-
-#### Method
-
-Our initial approach used Onshape's REST API to extract geometry directly from the original CAD documents:
-
-1. **Authenticate** via HMAC-signed API requests
-2. **Copy document** to a writable workspace (original docs are read-only)
-3. **Get feature list** (construction history)
-4. For each feature index `i`:
-   - **Set rollback bar** to position `i` (hides all features after `i`)
-   - **Check parts** (verify geometry exists at this state)
-   - **Create STEP translation** (async export request)
-   - **Poll translation status** until complete
-   - **Download STEP file**
-5. **Reset rollback bar** and **delete copied document**
-
-#### Results
-
-| Metric | Value |
-|--------|-------|
-| Models tested | 15 (DeepCAD subset) |
-| Success rate | 86.7% (13/15) |
-| Average time/model | 23 seconds |
-| Average states/model | 2.5 |
-| API calls/model | ~22 |
-| Total STEP files | 21 |
-| Total output size | 998 KB |
-
-#### Why It Failed at Scale
-
-After processing just 15 models (~300 API calls), the Onshape free tier returned HTTP 429:
-```
-HTTP/1.1 429 Too Many Requests
-Retry-After: 73808
-X-Rate-Limit-Remaining: 0
-```
-
-The 73,808-second lockout (~20 hours) made large-scale extraction impossible.
-
-Even the most expensive Enterprise plan (10,000 calls/year) would process only ~454 models/year. At that rate, 178K models would require **392 years**.
-
-Additionally, Onshape's Terms of Service explicitly prohibit data mining of public documents.
-
-**Full rate limit analysis**: see [`ONSHAPE_ANALYSIS.md`](ONSHAPE_ANALYSIS.md).
-
----
-
-### 3.2 Approach 2: Local OpenCascade Reconstruction
-
-#### Key Insight
-
-DeepCAD already provides the complete parametric data needed to reconstruct every model. Rather than querying Onshape for the geometry, we can replay the construction sequence locally using any B-rep kernel that supports sketch → extrude → boolean operations.
-
-We use **OpenCascade** (via CadQuery's `OCP` Python bindings) — the same open-source B-rep kernel used by FreeCAD, CadQuery, and many commercial CAD systems.
-
-#### Pipeline Architecture
+Parametric CAD construction is sequential: a model is built through a series of operations (sketch, extrude, boolean) that progressively transform geometry. We formalize this as:
 
 ```
-DeepCAD JSON → cadlib parser → CADSequence → OCC reconstruction → STEP export
-                                    │
-                                    ├── For each Extrude operation:
-                                    │   1. Build 2D sketch on 3D plane
-                                    │   2. Create extruded solid
-                                    │   3. Boolean with running body
-                                    │   4. Export cumulative geometry
-                                    │
-                                    └── Save metadata.json
+S_0 → a_0 → S_1 → a_1 → S_2 → ... → a_{n-1} → S_n
 ```
 
-#### Step-by-Step Reconstruction
+Where S_i is the geometry state (B-Rep, represented as a STEP file) and a_i is a parametric operation. Existing datasets provide either {S_n} (final geometry) or {a_0, ..., a_{n-1}} (operation sequences), but never {S_0, S_1, ..., S_n} (intermediate geometry states).
 
-**Step 1: Coordinate Transform (2D → 3D)**
+CAD-Steps fills this gap by providing STEP geometry at every construction step.
 
-DeepCAD stores sketch curves in a local 2D coordinate system. We transform each point to 3D using the sketch plane:
+## Approach 1: Onshape API Extraction (Failed)
 
-```python
-g_point = point[0] * sketch_plane.x_axis + point[1] * sketch_plane.y_axis + sketch_plane.origin
+### Method
+1. Port onshape-cad-parser (github.com/ChrisWu1997/onshape-cad-parser) from Python 2 to Python 3
+2. For each model in DeepCAD:
+   - Copy the Onshape document (to avoid modifying original)
+   - Get the feature list (construction history)
+   - For each feature position i:
+     - Set the rollback bar to position i
+     - Check if geometry exists (some positions are sketch-only with no solid)
+     - Create a STEP translation request
+     - Poll until translation completes
+     - Download the STEP file
+   - Reset rollback bar, delete the copy
+3. Save metadata (feature types, export status, file sizes)
+
+### API Call Budget Per Model
+- 7 fixed overhead calls (get features, copy doc, get elements, etc.)
+- ~5 calls per feature state (rollback, get parts, create translation, poll status, download)
+- Average model has ~3 exportable feature states
+- **Total: ~22 API calls per model**
+
+### Results
+- 15-model test batch: 86.7% success rate on pre-filtered DeepCAD models
+- Average 23 seconds per successful model
+- Average 2.5 exportable states per model
+
+### Why It Failed: Rate Limits
+After processing ~15 models (~300 API calls), the Onshape API returned HTTP 429 with:
+- `Retry-After: 73808` (20 hours)
+- `X-Rate-Limit-Remaining: 0`
+
+Official annual API call limits:
+
+| Plan | Calls/Year | Models/Year | Years for 178K Models |
+|------|-----------|-------------|----------------------|
+| Free | ~300/day | ~15/day | ~32 years |
+| Standard | 2,500 | 113 | 1,576 |
+| Professional | 5,000 | 227 | 785 |
+| Enterprise | 10,000 | 454 | **392** |
+
+Additionally, Onshape's Terms of Service prohibit data mining public documents.
+
+**Conclusion**: API-based extraction does not scale beyond ~15 models/day on free tier, and is contractually prohibited at any tier.
+
+## Approach 2: Local OpenCascade Reconstruction (Successful)
+
+### Key Insight
+DeepCAD already provides pre-parsed construction sequences as JSON files. Each file contains:
+- Sketch entities with curve data (Line3D, Circle3D, Arc3D coordinates)
+- Extrude parameters (distance, direction, boolean operation type)
+- Sketch plane coordinate systems (origin, normal, x_axis, y_axis)
+- Construction sequence ordering
+
+We can replay these sequences locally using any CAD kernel that supports B-Rep operations and STEP export.
+
+### Pipeline
+
+```
+DeepCAD JSON → Parse → For each step: Build OCC geometry → Export STEP → Save metadata
 ```
 
-**Step 2: Edge Construction**
+For each model:
 
-Each curve type maps to an OCC edge builder:
-- `Line` → `BRepBuilderAPI_MakeEdge(start_pnt, end_pnt)`
-- `Circle` → `BRepBuilderAPI_MakeEdge(gp_Circ(center, axis, radius))`
-- `Arc` → `GC_MakeArcOfCircle(start, mid, end)` → `BRepBuilderAPI_MakeEdge`
+1. **Parse**: Load JSON, construct CADSequence object (from DeepCAD's cadlib)
+2. **Normalize**: Scale coordinates to standard range
+3. **For each operation in sequence**:
+   - **If Sketch**: 
+     - Build 2D wireframe from curve data (Line, Circle, Arc edges)
+     - Transform from local sketch coordinates to global 3D coordinates
+     - Export wireframe edges as STEP (2D geometry on sketch plane)
+   - **If Extrude**:
+     - Build sketch profile face (wires → face)
+     - Create solid via BRepPrimAPI_MakePrism (prism extrusion along normal)
+     - Handle extent types: OneSide, Symmetric (both directions), TwoSides
+     - Apply boolean with accumulated body:
+       - NewBody/Join: BRepAlgoAPI_Fuse
+       - Cut: BRepAlgoAPI_Cut
+       - Intersect: BRepAlgoAPI_Common
+     - Export resulting solid as STEP
+4. **Save metadata.json** with all operation details and sketch geometry
 
-Degenerate edges (zero-length lines) are filtered out.
+### Implementation Details
 
-**Step 3: Wire and Face Construction**
+**CAD kernel**: OpenCascade Technology (OCCT) via CadQuery/OCP Python bindings. Specifically, we use OCP (the raw Python wrapper) rather than CadQuery's higher-level API, for maximum control over geometry creation.
 
-```python
-# Build wire from edges
-wire = BRepBuilderAPI_MakeWire()
-for edge in loop_edges:
-    wire.Add(edge)
+**Key OCC classes used**:
+- `gp_Pnt, gp_Dir, gp_Vec, gp_Pln, gp_Ax2, gp_Ax3` — geometric primitives
+- `BRepBuilderAPI_MakeEdge, MakeWire, MakeFace` — build topology from geometry
+- `BRepPrimAPI_MakePrism` — extrude face to solid
+- `BRepAlgoAPI_Fuse, Cut, Common` — boolean operations
+- `GC_MakeArcOfCircle` — create arc edges
+- `STEPControl_Writer` — export to STEP (AP203/AP214)
 
-# Build face from outer wire + inner wires (holes)
-face = BRepBuilderAPI_MakeFace(sketch_plane, outer_wire)
-for inner_wire in inner_wires:
-    face.Add(inner_wire.Reversed())  # Reversed = hole
-```
+**Parallelization**: ProcessPoolExecutor (not ThreadPoolExecutor, to avoid GIL contention in OCC). Each worker is fully independent; no shared state.
 
-**Step 4: Extrusion**
+**Checkpointing**: Before processing a model, check if metadata.json already exists in the output directory. If so, skip. This enables safe resume after crashes.
 
-```python
-ext_vec = gp_Vec(normal).Multiplied(extrude_distance)
-body = BRepPrimAPI_MakePrism(face, ext_vec).Shape()
+### Results
 
-# Handle symmetric extrusion
-if extent_type == "Symmetric":
-    body_sym = BRepPrimAPI_MakePrism(face, ext_vec.Reversed()).Shape()
-    body = BRepAlgoAPI_Fuse(body, body_sym).Shape()
-
-# Handle two-sided extrusion
-if extent_type == "TwoSides":
-    ext_vec2 = gp_Vec(normal.Reversed()).Multiplied(distance_two)
-    body_two = BRepPrimAPI_MakePrism(face, ext_vec2).Shape()
-    body = BRepAlgoAPI_Fuse(body, body_two).Shape()
-```
-
-**Step 5: Boolean Operation**
-
-```python
-if operation == "NewBody" or operation == "Join":
-    cumulative = BRepAlgoAPI_Fuse(cumulative, new_body).Shape()
-elif operation == "Cut":
-    cumulative = BRepAlgoAPI_Cut(cumulative, new_body).Shape()
-elif operation == "Intersect":
-    cumulative = BRepAlgoAPI_Common(cumulative, new_body).Shape()
-```
-
-**Step 6: STEP Export**
-
-```python
-writer = STEPControl_Writer()
-writer.Transfer(cumulative_shape, STEPControl_AsIs)
-writer.Write("state_NNNN.step")
-```
-
-This export happens after every operation, producing the intermediate state file.
-
-#### Parallelization
-
-We use Python's `ProcessPoolExecutor` for parallel processing:
-- Each worker is a separate process (avoids GIL issues with OCC)
-- Models are independent; no shared state between workers
-- Checkpoint support: existing `metadata.json` files are skipped on restart
-- Progress reporting every 50 models with ETA estimation
-
-#### Validation Results (200-Model Batch)
+200-model validation batch (8 workers):
 
 | Metric | Value |
 |--------|-------|
 | Models processed | 200 |
-| Success rate | 100% (200/200) |
+| Success rate | 100% |
 | STEP files generated | 395 |
 | Total output size | 32.8 MB |
-| Wall clock time | 1.5 seconds |
-| Workers | 8 |
-| Effective time/model | 7.7 ms |
+| Total processing time | 1.5 seconds |
+| Effective time per model | 7.7 ms |
 
-#### Full Dataset Projections
+Comparison:
 
-| Workers | Time | Throughput |
-|---------|------|------------|
-| 1 (sequential) | ~23 min | 129/s |
-| 4 | ~6 min | 516/s |
-| 8 | **~3 min** | 1,032/s |
-| 16 | ~1.5 min | 2,064/s |
+| Metric | Onshape API | Local OCC | Speedup |
+|--------|-------------|-----------|---------|
+| Time/model | 23,000 ms | 7.7 ms | **885x** |
+| API calls/model | 22 | 0 | ∞ |
+| Success rate | 86.7% | 100% | +13.3pp |
+| Rate limited | Yes (20h lockout) | No | - |
+| Internet required | Yes | No | - |
+| 178K models | 392 years | ~3 minutes | - |
 
-Estimated output: **~352,000 STEP files**, **~29 GB** total.
+## Data Format
 
----
+### Source Data
 
-## 4. Quality Considerations
-
-### 4.1 Reconstructed vs Original Geometry
-
-The local pipeline reconstructs geometry from DeepCAD's parsed parameters rather than exporting from the original Onshape documents. Key differences:
-
-| Aspect | Onshape (original) | Local (reconstructed) |
-|--------|--------------------|-----------------------|
-| Kernel | Parasolid | OpenCascade (OCCT) |
-| Precision | Onshape's internal | OCC defaults (~1e-6) |
-| STEP schema | AP214 | AP214 (OCCT default) |
-| Tessellation | Onshape rendering | Not applicable (B-rep only) |
-| Parameters | Original | Parsed + normalized |
-
-For the sketch-and-extrude operations in DeepCAD, the geometric results are expected to be nearly identical, as both kernels implement the same fundamental operations (planar face extrusion, boolean operations). Minor differences may arise from:
-- Floating-point precision in coordinate transforms
-- Edge case handling in boolean operations (e.g., touching faces)
-- STEP file formatting and metadata
-
-### 4.2 Known Failure Modes
-
-Some models fail during reconstruction. Common causes:
-- **Degenerate sketches**: Profiles with zero-area loops or self-intersecting edges
-- **Boolean failures**: Self-intersecting geometry after boolean operations
-- **Wire construction errors**: Non-contiguous edges that don't form a closed wire
-- **Negative extrusion**: Some models have negative extrusion distances that produce invalid geometry
-
-All failures are logged in `metadata.json` with error messages. Models with partial failures still produce valid STEP files for the successful steps.
-
-### 4.3 Validation Strategy
-
-To validate the local pipeline's output quality:
-1. **Cross-reference with Onshape exports**: Compare local STEP files with the 13 models successfully exported via the Onshape API (available when rate limits reset)
-2. **Shape validity checking**: Use `BRepCheck_Analyzer` to verify each exported shape
-3. **Visual inspection**: Render a random sample of intermediate states to verify geometric correctness
-4. **Statistics**: Compare file sizes, face counts, and bounding boxes between approaches
-
----
-
-## 5. Output Format
-
-### 5.1 Per-Model Directory
-
-Each model produces a directory containing:
-- `state_NNNN.step`: STEP geometry file for each successfully exported intermediate state
-- `metadata.json`: Full construction trajectory metadata
-
-### 5.2 Metadata Schema
+DeepCAD's JSON format (per model):
 
 ```json
 {
-  "data_id": "string",            // Model identifier (matches DeepCAD ID)
-  "num_operations": "int",        // Total operations in the sequence
-  "states": [
-    {
-      "index": "int",             // Operation index (0-based)
-      "operation": "string",      // "NewBodyFeatureOperation" | "JoinFeatureOperation" |
-                                  // "CutFeatureOperation" | "IntersectFeatureOperation"
-      "extent_type": "string",    // "OneSideFeatureExtentType" | "SymmetricFeatureExtentType" |
-                                  // "TwoSidesFeatureExtentType"
-      "extent_one": "float",      // Primary extrusion distance
-      "exported": "bool",         // Whether STEP file was successfully generated
-      "step_file": "string",      // Filename (present if exported=true)
-      "size_kb": "float",         // File size in KB (present if exported=true)
-      "error": "string",          // Error message (present if exported=false)
-      "valid": "bool"             // Shape validity (present if --validate flag used)
+  "entities": {
+    "<sketch_id>": {
+      "type": "Sketch",
+      "name": "Sketch 1",
+      "transform": {"origin": {}, "x_axis": {}, "y_axis": {}, "z_axis": {}},
+      "profiles": {
+        "<profile_id>": {
+          "loops": [
+            {
+              "is_outer": true,
+              "profile_curves": [
+                {"type": "Line3D", "start_point": {}, "end_point": {}},
+                {"type": "Circle3D", "center_point": {}, "radius": 0.091, "normal": {}},
+                {"type": "Arc3D", "start_point": {}, "end_point": {}, "center_point": {}, "radius": 0.025}
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "<extrude_id>": {
+      "type": "ExtrudeFeature",
+      "name": "Extrude 1",
+      "operation": "NewBodyFeatureOperation|JoinFeatureOperation|CutFeatureOperation|IntersectFeatureOperation",
+      "extent_type": "OneSideFeatureExtentType|SymmetricFeatureExtentType|TwoSidesFeatureExtentType",
+      "extent_one": {"distance": {"value": 0.0254}},
+      "profiles": [{"profile": "<profile_id>", "sketch": "<sketch_id>"}]
     }
-  ],
-  "total_exported": "int",        // Count of successfully exported states
-  "total_operations": "int"       // Same as num_operations
+  },
+  "sequence": [
+    {"index": 0, "type": "Sketch", "entity": "<sketch_id>"},
+    {"index": 1, "type": "ExtrudeFeature", "entity": "<extrude_id>"}
+  ]
 }
 ```
 
-### 5.3 Batch Results
+**Curve types in source data**: Line3D (start + end points), Circle3D (center + radius + normal), Arc3D (start + end + center + radius + angles + reference vector).
 
-The batch runner produces `batch_results.json` with aggregate statistics:
+### Output Data
 
-```json
-{
-  "timestamp": "2026-04-14T16:40:41.983149",
-  "total": 200,
-  "succeeded": 200,
-  "failed": 0,
-  "total_files": 395,
-  "total_size_kb": 32752.2,
-  "total_time": 1.54,
-  "workers": 8
-}
+Per-model directory with STEP files and metadata:
+
+```
+<model_id>/
+├── state_0000.step     # First operation state (sketch or extrude)
+├── state_0001.step     # Second operation state
+├── ...
+└── metadata.json       # Operation details and sketch geometry
 ```
 
----
+### What DeepCAD Does NOT Provide (Constraints)
 
-## 6. Potential Training Approaches
+DeepCAD's JSON stores **resolved geometry only**, not the original design-intent constraints from Onshape's parametric solver. Missing data:
 
-The CAD-Steps dataset enables several learning paradigms:
+**Geometric constraints** (not available):
+- Concentric (circles share center)
+- Parallel, perpendicular, tangent
+- Equal-length, symmetric
+- Horizontal, vertical
+- Coincident, midpoint
 
-### 6.1 Next-State Prediction
-Given `(Gₙ, opₙ₊₁)`, predict `Gₙ₊₁`. This is the most direct use of the dataset, analogous to next-token prediction in language models but in geometric space.
+**Dimensional constraints** (not available):
+- Named distances and angles
+- Parametric relationships (e.g., "radius = 2 * other_radius")
 
-### 6.2 Inverse Modeling (Operation Prediction)
-Given `(Gₙ, Gₙ₊₁)`, predict `opₙ₊₁`. Useful for understanding what operation transforms one shape into another.
+**Feature references** (not available):
+- Which sketch plane references which face of an existing body
+- Feature dependencies in the construction tree
 
-### 6.3 Process Reward Modeling
-Train a reward model on `(Gₙ, opₙ₊₁, Gₙ₊₁)` triples to score whether each step is "correct" (valid geometry, reasonable operation). Analogous to PRM800K for math.
+The geometry in the JSON is fully evaluated/resolved: all coordinates are absolute numbers, not expressions of constraints. This means our dataset captures the **geometric trajectory** but not the full **reasoning trajectory** that includes design intent.
 
-### 6.4 Trajectory-Level Generation
-Generate complete construction sequences by autoregressively predicting `(op₁, G₁, op₂, G₂, ...)`. Can condition on target geometry for reconstruction, or generate unconditionally for novel design.
-
-### 6.5 Diffusion Over Trajectories
-Apply diffusion models to the full trajectory representation, denoising from random geometry sequences to valid construction trajectories.
-
-### 6.6 Retrieval-Augmented CAD
-Use intermediate states as a retrieval index. Given a partially constructed model, find similar intermediate states in the dataset and suggest next operations based on how those models were completed.
+We can infer some constraints post-hoc from geometry (e.g., two circles with identical centers are likely concentric), but this is approximate and does not recover the constraint solver's internal state. This is documented as a limitation and future work direction in the paper.

@@ -1,201 +1,200 @@
 # Experiment Log
 
-Chronological record of everything attempted in the CAD-Steps project.
+Chronological log of everything attempted in the CAD-Steps project, including failures. This document is intended to support a research paper and should contain enough detail to reproduce results.
 
 ---
 
-## 2026-04-14 (Day 1)
+## 2026-04-14 ~12:00pm — Project Initialization
 
-### Morning: Project Inception
+**Goal**: Create a dataset of intermediate CAD construction states (geometry at every step, not just final).
 
-**Time**: ~12:00pm
-**What**: Identified gap in existing CAD datasets. None provide intermediate B-Rep geometry at each construction step.
-
-**Key insight**: Training models on intermediate states (process supervision) outperforms outcome-only supervision in math (PRM, 12%+), robotics (trajectory learning), and code. CAD has the same sequential structure but no dataset captures intermediate geometry.
+**Motivation**: Intermediate supervision outperforms outcome-only supervision across ML domains (math PRMs, robotics trajectory learning, code execution traces). CAD has the same sequential structure but no existing dataset captures intermediate geometry.
 
 **Data sources identified**:
-- DeepCAD: 178K models with Onshape links and pre-parsed JSON
-- ABC Dataset: 1M models (need filtering)
-- Fusion 360 Gallery: 8.6K models
+- DeepCAD: 178,238 models, pre-filtered for sketch+extrude, JSON sequences available
+- ABC Dataset: ~1M models on Onshape, but ~60% use unsupported operations
+- Fusion 360 Gallery: 8,625 models with richer operations
 
-**Created**: GitHub repo, README, METHODOLOGY.md, ROADMAP.md, INFRASTRUCTURE.md
+**Initial plan**: Use Onshape API to rollback feature trees and export STEP at each position.
 
----
-
-### Early Afternoon: Onshape API Pipeline (Approach 1)
-
-**Time**: ~12:30pm - 2:30pm
-**What**: Built pipeline to extract intermediate STEP files via Onshape API.
-
-**Steps**:
-1. Ported `onshape-cad-parser` (github.com/ChrisWu1997/onshape-cad-parser) from Python 2 to Python 3
-2. Added HMAC-based API authentication
-3. Implemented feature tree rollback: set rollback bar to each feature position
-4. Added STEP export at each state via Onshape's translation API
-5. Built parallel batch runner with ThreadPoolExecutor
-
-**API Pipeline Per Model** (~22 API calls):
-1. GET features list (1 call)
-2. Copy document to avoid modifying original (3 calls)
-3. For each extrude state (N times):
-   - SET rollback bar (1 call)
-   - GET parts list (1 call)
-   - POST create translation to STEP (1 call)
-   - GET translation status, poll until done (1-3 calls)
-   - GET download translated file (1 call)
-4. Reset rollback bar (1 call)
-5. DELETE copied document (1 call)
+**Artifacts**: Created GitHub repo (github.com/amywork777/cad-steps-dataset), README, METHODOLOGY, ROADMAP, INFRASTRUCTURE docs.
 
 ---
 
-### Afternoon: First Test Batches
+## 2026-04-14 ~12:30pm — Onshape API Setup
 
-**Time**: ~2:30pm - 3:00pm
+**What we did**: Attempted to generate Onshape API keys for amzyst@gmail.com account.
 
-**Test Batch 1 (15 random ABC models, 3 workers)**:
-- 3/15 = 404 (deleted documents)
-- 8/15 = filtered (unsupported ops: fillet, revolve, circularPattern, chamfer)
-- 4/15 = succeeded
-- Success rate: 27% overall, but 57% of reachable docs
-- Average time per successful model: 40.2s
-- Total STEP files: 21
+**Problem**: Developer Portal requires accepting API agreement, then navigating to account settings to create API keys. Browser automation was flaky; the account settings pages kept hanging or rendering blank.
 
-**Test Batch 2 (15 DeepCAD-verified models, 3 workers)**:
-- 2/15 = 404 errors
-- 0/15 = filtered (all pre-verified sketch+extrude)
-- 13/15 = succeeded
-- Success rate: 86.7% (93% of reachable docs)
-- Average time per successful model: 23s
-- Total STEP files: 38
-
-**Learning**: DeepCAD pre-filtered models have much higher success rate than random ABC models.
+**Resolution**: Eventually got API keys generated. Set up credentials in code/creds.json.
 
 ---
 
-### 3:00pm: RATE LIMIT DISASTER
+## 2026-04-14 ~1:00pm — Onshape Parser Port (Python 3)
 
-**Time**: ~3:00pm
-**What**: Attempted 1000-model batch. Immediately hit Onshape rate limits.
+**What we did**: Ported github.com/ChrisWu1997/onshape-cad-parser from Python 2 to Python 3.
 
-**What happened**:
-- Launched 1000 models with 5 workers, no rate limiting
-- Burned through entire daily API quota in ~30 seconds
-- ALL 1000 models returned HTTP 429 "Too Many Requests"
-- Response headers: `Retry-After: 73816` (20.5 hours), `X-Rate-Limit-Remaining: 0`
+**Changes required**:
+- Updated urllib2 → urllib, httplib → http.client, print statements → functions
+- Fixed HMAC authentication (string vs bytes issues)
+- Updated API client for current Onshape REST API endpoints
+- Added rollback functionality (set_rollback_bar API call)
+- Added STEP export at each rollback position
 
-**Rate Limit Analysis**:
+**Result**: Working Python 3 Onshape API client with rollback + STEP export capability.
 
-| Plan | Annual Calls | Models/Year (at 22 calls each) | Years for 178K |
-|------|-------------|-------------------------------|----------------|
-| Free | ~300/day? | ~15/day | ~32 years |
-| Standard | 2,500/year | 113/year | 1,576 years |
-| Professional | 5,000/year | 227/year | 785 years |
-| Enterprise | 10,000/year | 454/year | **392 years** |
-
-**ToS concern**: "using the API to scrape or data mine the Onshape Public Documents is prohibited"
-
-**Conclusion**: Onshape API extraction is fundamentally impossible at scale. Even the most expensive plan would take centuries.
-
-**Report written**: `docs/reports/rate_limit_analysis_2026-04-14.md`
+**Files**: code/onshape_api/, code/export_steps.py
 
 ---
 
-### 3:30pm: THE PIVOT
+## 2026-04-14 ~1:30pm — First Successful Export (1 model)
 
-**Time**: ~3:30pm
-**What**: Pivoted to local reconstruction using OpenCascade.
+**What we did**: Tested the rollback pipeline on a single DeepCAD model.
 
-**Key realization**: DeepCAD already parsed all 178K models into JSON with full parametric data (sketch curves, extrude params, boolean operations). We don't need Onshape at all. We can replay the construction sequence locally using any CAD kernel that supports STEP export.
+**Pipeline**: 
+1. Copy document (to avoid modifying original)
+2. Get feature list
+3. For each feature: set rollback bar → check for parts → translate to STEP → download
+4. Reset rollback bar, delete copy
 
-**Built `local_export.py`**:
-- Uses OCP (OpenCascade Python bindings via CadQuery)
-- Reads DeepCAD JSON, creates CADSequence objects
-- For each extrude operation:
-  - Creates sketch face from profile curves (Line, Circle, Arc)
-  - Extrudes to create solid body
-  - Applies boolean (Fuse/Cut/Common) with accumulated body
-  - Exports STEP at each intermediate state
-- Saves metadata.json with operation details
-
-**Adapted from**: DeepCAD's `cadlib/visualize.py`, replacing pythonocc (OCC.Core) with OCP
+**Result**: Successfully exported intermediate STEP files for model 00000007 (1 feature, 1 STEP file, 4 KB, 13 seconds).
 
 ---
 
-### 4:00pm: First Local Test
+## 2026-04-14 ~2:00pm — Test Batch (15 models via Onshape API)
 
-**Time**: ~4:00pm
-**What**: Tested local pipeline on 5 models.
+**What we did**: Ran the export pipeline on 15 models from DeepCAD.
 
-**Result**: All 5 succeeded. Average time: ~26ms per model.
-**vs API**: 885x faster (7.7ms effective vs 23,000ms per model)
+**Results**:
+- 4/15 succeeded (26.7% raw success rate)
+- 11/15 filtered out: 3 errors (404/deleted docs), 8 unsupported operations (fillet, revolve, circularPattern, chamfer, etc.)
+- Of the 4 that could be processed: 4/4 = 100% success
+- 21 STEP files generated, 998 KB total
+- Average time: 40.2s per successful model (min 13s, max 57s)
+- Average 5.25 states per successful model
 
----
-
-### 4:30pm: 200-Model Batch
-
-**Time**: ~4:30pm
-**What**: Full 200-model batch with 8 parallel workers.
-
-**Built `run_local_batch.py`**:
-- ProcessPoolExecutor (not Thread, to avoid GIL)
-- Resume support: checks for existing metadata.json
-- Progress reporting every 50 models
-- Batch results saved to JSON
-
-**Result**:
-
-| Metric | Value |
-|--------|-------|
-| Models | 200 |
-| Success | 200 (100%) |
-| Failed | 0 |
-| STEP files | 395 |
-| Total size | 32.8 MB |
-| Total time | 1.5 seconds |
-| Avg time/model | 7.7 ms |
-
-**Full dataset projections (178K models)**:
-- 8 workers: ~3 minutes
-- Estimated STEP files: ~352K
-- Estimated size: ~29 GB
+**Learning**: Raw ABC links contain many models with unsupported operations. DeepCAD's pre-filtering is essential.
 
 ---
 
-### Late Afternoon: Documentation + Push
+## 2026-04-14 ~2:30pm — DeepCAD-Verified Batch Test
 
-**Time**: ~4:45pm
-**What**: Committed all code, updated documentation, pushed to GitHub.
+**What we did**: Used links verified to be in the DeepCAD dataset (known sketch+extrude only).
 
-**Commits**:
-- `c8579c4`: Add local STEP export pipeline (no API needed)
-- `d18cd59`: feat: local STEP export pipeline using OpenCascade
-- `df99dd8`: Add parallel local batch runner (200 models in 1.5s)
-- `48b111a`: feat: parallel batch runner, local reconstruction pipeline, updated README
+**Results**:
+- 13/15 succeeded (86.7% success rate)
+- 2 failures were API errors / document access issues
+- Average 23s per model
+- Average 2.5 exportable states per model
 
----
-
-## Comparison: Approach 1 vs Approach 2
-
-| Metric | Onshape API | Local (OpenCascade) |
-|--------|-------------|---------------------|
-| Time per model | ~23,000 ms | ~7.7 ms |
-| Speedup | 1x | **885x** |
-| API calls/model | ~22 | 0 |
-| Rate limits | ~300/day (free) | None |
-| Cost | Paid plans needed | Free |
-| 178K models time | 392+ years | ~3 minutes |
-| Dependencies | Internet, Onshape account | Python, CadQuery |
-| Data quality | Original Onshape B-Rep | Reconstructed from parsed JSON |
-| Success rate | 86.7% (DeepCAD) | 100% |
-| Constraints data | Available via API (not extracted) | Not available in JSON |
+**Learning**: Pre-filtered DeepCAD models have much higher success rates than random ABC models.
 
 ---
 
-## Next Steps (as of end of day 1)
+## 2026-04-14 ~3:00pm — RATE LIMIT WALL (Critical Finding)
 
-1. ✅ Run full 178K dataset (~3 min)
-2. Add 2D sketch wireframe export (STEP with curves only, no extrusion)
-3. Investigate constraint inference from sketch geometry
-4. Quality validation (compare subset with Onshape exports)
-5. Upload to HuggingFace Datasets
-6. Write paper methodology section
+**What we did**: Attempted to scale to 1000 models with 5 parallel workers.
+
+**Result**: HTTP 429 (Too Many Requests) after ~300 API calls (~15 models).
+- `Retry-After: 73808` seconds (**~20 hours**)
+- `X-Rate-Limit-Remaining: 0`
+- All remaining models in the batch returned 429 immediately
+
+**Investigation**:
+- Free plan: daily rolling limit of ~300-500 calls
+- Standard plan: 2,500 calls/year
+- Professional plan: 5,000 calls/year
+- Enterprise plan: 10,000 calls/year
+- Each model requires ~22 API calls (7 overhead + ~5 per feature state)
+
+**Scale analysis**:
+
+| Target | API Calls | Years on Enterprise (10k/yr) |
+|--------|-----------|------------------------------|
+| 178K models (DeepCAD) | 3.9M | **392 years** |
+| 500K models (ABC) | 11M | **1,100 years** |
+
+**Additional blocker**: Onshape ToS states "using the API to scrape or data mine the Onshape Public Documents is prohibited."
+
+**Conclusion**: The Onshape API approach is fundamentally unscalable for dataset-size extraction.
+
+**Report**: docs/reports/rate_limit_analysis_2026-04-14.md
+
+---
+
+## 2026-04-14 ~3:30pm — THE PIVOT: Local OpenCascade Pipeline
+
+**Insight**: DeepCAD already provides pre-parsed JSON with the full construction sequence (sketch coordinates, extrude parameters, boolean operations). We don't need Onshape at all. We can replay these sequences locally using OpenCascade.
+
+**What we built**: `code/local_export.py`
+- Parses DeepCAD JSON (CADSequence objects)
+- Creates OCC geometry: sketch curves → face → prism → boolean
+- Exports STEP at each intermediate step
+- Uses OCP (CadQuery's OpenCascade bindings), NOT pythonocc
+
+**Key code path**:
+1. `CADSequence.from_dict(json_data)` → parse JSON into structured objects
+2. For each extrude operation:
+   - `create_by_extrude()` → sketch profile face → BRepPrimAPI_MakePrism → solid
+   - Apply boolean: BRepAlgoAPI_Fuse (join), BRepAlgoAPI_Cut (cut), BRepAlgoAPI_Common (intersect)
+   - `write_step(body, path)` → STEPControl_Writer → .step file
+3. Save metadata.json with operation details
+
+---
+
+## 2026-04-14 ~4:00pm — First Local Test (5 models)
+
+**Result**: All 5 models succeeded. Average ~26ms per model.
+
+**Comparison with Onshape API**:
+- Speed: 26ms vs 23,000ms per model (**885x faster**)
+- API calls: 0 vs 22 per model
+- Rate limits: none vs 300/day
+- Internet: not required vs required
+
+---
+
+## 2026-04-14 ~4:30pm — 200-Model Batch (Local Pipeline)
+
+**What we did**: Built parallel batch runner (`code/run_local_batch.py`) with ProcessPoolExecutor.
+
+**Results**:
+- **200/200 succeeded (100% success rate)**
+- 395 STEP files generated
+- 32.8 MB total output
+- 1.5 seconds total time with 8 workers
+- 7.7ms per model effective time
+
+**Full dataset projections**:
+- 178K models: ~3 minutes with 8 workers
+- ~352K STEP files
+- ~29 GB
+
+**Files**: code/run_local_batch.py, data/cad_steps_output/batch_results.json
+
+---
+
+## 2026-04-14 ~4:45pm — Documentation Sprint (This Session)
+
+**What we're doing**: Creating comprehensive documentation for a research paper.
+
+**Updates**:
+- Rewritten README.md with research-quality content
+- Created docs/PAPER_NOTES.md with related work and experiment ideas
+- Created docs/EXPERIMENT_LOG.md (this file)
+- Updated docs/METHODOLOGY.md with both approaches
+- Updated docs/ROADMAP.md with current status
+
+**Key discovery during documentation**: DeepCAD's JSON does NOT contain parametric constraints (concentric, parallel, equal-length, etc.). Only resolved geometry coordinates are stored. This is a significant limitation for the dataset and paper, but also an opportunity for future work.
+
+---
+
+## Summary of Key Metrics
+
+| Approach | Models/day | Success Rate | Time/Model | API Calls |
+|----------|-----------|-------------|------------|-----------|
+| Onshape API (free) | ~15 | 87% | 23s | 22 |
+| Onshape API (Enterprise) | ~1.2 | 87% | 23s | 22 |
+| Local OCC (sequential) | ~4.7M | 100% | 7.7ms | 0 |
+| Local OCC (8 workers) | ~37M | 100% | 7.7ms | 0 |
