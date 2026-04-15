@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """
-Local STEP export from DeepCAD JSON data (v2).
+CAD-Steps: Local STEP export from DeepCAD JSON data (v2).
 
-Exports STEP geometry at EVERY intermediate step including 2D sketch wireframes.
-Infers geometric constraints from curve geometry.
+Exports STEP geometry at EVERY intermediate step including 2D sketch
+wireframes and 3D extrude solids. Infers geometric constraints from
+curve geometry.
 
-State numbering follows the DeepCAD sequence:
+State numbering follows the original DeepCAD sequence order:
   state_0001.step  (sketch wireframe)
   state_0002.step  (extrude solid)
-  state_0003.step  (next sketch wireframe on top of existing solid)
-  state_0004.step  (next extrude)
+  state_0003.step  (sketch wireframe overlaid on solid)
+  state_0004.step  (extrude cut)
   ...
 
+metadata.json includes per-step info, sketch geometry with curves,
+extrude params, and inferred constraints.
+
+NO Onshape API required.
+
 Usage:
-    python3 local_export.py --test
     python3 local_export.py --input path/to/model.json --output /tmp/out
+    python3 local_export.py --test
     python3 local_export.py --input-dir path/to/jsons --output /tmp/batch --limit 200
 """
 
@@ -44,13 +50,11 @@ from cadlib.sketch import Profile, Loop
 from cadlib.curves import Line, Circle, Arc
 
 
-# =============== geometry helpers ===============
+# ===================== geometry helpers =====================
 
 def point_local2global(point, sketch_plane, to_gp_Pnt=True):
     g = point[0] * sketch_plane.x_axis + point[1] * sketch_plane.y_axis + sketch_plane.origin
-    if to_gp_Pnt:
-        return gp_Pnt(float(g[0]), float(g[1]), float(g[2]))
-    return g
+    return gp_Pnt(float(g[0]), float(g[1]), float(g[2])) if to_gp_Pnt else g
 
 
 def create_edge_3d(curve, sketch_plane):
@@ -88,10 +92,10 @@ def create_profile_face(profile, sketch_plane):
     origin = gp_Pnt(*[float(x) for x in sketch_plane.origin])
     normal = gp_Dir(*[float(x) for x in sketch_plane.normal])
     x_axis = gp_Dir(*[float(x) for x in sketch_plane.x_axis])
-    gp_face = gp_Pln(gp_Ax3(origin, normal, x_axis))
+    plane = gp_Pln(gp_Ax3(origin, normal, x_axis))
 
     wires = [create_loop_wire(lp, sketch_plane) for lp in profile.children]
-    mk = BRepBuilderAPI_MakeFace(gp_face, wires[0])
+    mk = BRepBuilderAPI_MakeFace(plane, wires[0])
     for w in wires[1:]:
         try:
             reversed_wire = TopoDS.Wire_s(w.Reversed())
@@ -115,17 +119,15 @@ def create_by_extrude(extrude_op):
     if extrude_op.extent_type == EXTENT_TYPE.index("SymmetricFeatureExtentType"):
         body_sym = BRepPrimAPI_MakePrism(face, ext_vec.Reversed()).Shape()
         body = BRepAlgoAPI_Fuse(body, body_sym).Shape()
-
     if extrude_op.extent_type == EXTENT_TYPE.index("TwoSidesFeatureExtentType"):
-        ext_vec2 = gp_Vec(normal.Reversed()).Multiplied(float(extrude_op.extent_two))
-        body_two = BRepPrimAPI_MakePrism(face, ext_vec2).Shape()
-        body = BRepAlgoAPI_Fuse(body, body_two).Shape()
+        ext2 = gp_Vec(normal.Reversed()).Multiplied(float(extrude_op.extent_two))
+        body2 = BRepPrimAPI_MakePrism(face, ext2).Shape()
+        body = BRepAlgoAPI_Fuse(body, body2).Shape()
 
     return body, sketch_plane
 
 
 def create_sketch_wireframe(extrude_op):
-    """Build wireframe compound from a sketch profile."""
     profile = copy(extrude_op.profile)
     profile.denormalize(extrude_op.sketch_size)
     sketch_plane = copy(extrude_op.sketch_plane)
@@ -134,17 +136,12 @@ def create_sketch_wireframe(extrude_op):
     builder = BRep_Builder()
     compound = TopoDS_Compound()
     builder.MakeCompound(compound)
-
     for loop in profile.children:
         for curve in loop.children:
-            try:
-                edge = create_edge_3d(curve, sketch_plane)
-                if edge is not None:
-                    builder.Add(compound, edge)
-            except Exception:
-                pass
-
-    return compound, sketch_plane
+            edge = create_edge_3d(curve, sketch_plane)
+            if edge is not None:
+                builder.Add(compound, edge)
+    return compound
 
 
 def make_compound_with_body(body, sketch_compound):
@@ -168,14 +165,19 @@ def write_step(shape, filepath):
         return False
 
 
-# =============== constraint inference ===============
+# ===================== constraint inference =====================
 
 def _pt(p):
     return (round(float(p[0]), 8), round(float(p[1]), 8))
 
 
 def infer_sketch_constraints(profile):
-    """Infer geometric constraints from curve geometry."""
+    """Infer geometric constraints from sketch curve geometry.
+
+    DeepCAD JSON has no explicit constraints, but we detect:
+      coincident, horizontal, vertical, parallel, perpendicular,
+      equal_length, concentric, equal_radius
+    """
     constraints = []
     all_curves = []
     for loop in profile.children:
@@ -188,21 +190,19 @@ def infer_sketch_constraints(profile):
     for idx, c in enumerate(all_curves):
         if isinstance(c, Line):
             sp, ep = _pt(c.start_point), _pt(c.end_point)
-            dx = ep[0] - sp[0]
-            dy = ep[1] - sp[1]
+            dx, dy = ep[0] - sp[0], ep[1] - sp[1]
             length = np.sqrt(dx*dx + dy*dy)
             lines_data.append({'idx': idx, 'sp': sp, 'ep': ep, 'dx': dx, 'dy': dy, 'length': length})
         elif isinstance(c, Circle):
-            circle_data.append({'idx': idx, 'type': 'circle', 'center': _pt(c.center), 'radius': round(float(c.radius), 8)})
+            circle_data.append({'idx': idx, 'type': 'circle',
+                                'center': _pt(c.center), 'radius': round(float(c.radius), 8)})
         elif isinstance(c, Arc):
-            circle_data.append({
-                'idx': idx, 'type': 'arc', 'center': _pt(c.center),
-                'radius': round(float(c.radius), 8),
-                'sp': _pt(c.start_point), 'ep': _pt(c.end_point)
-            })
+            circle_data.append({'idx': idx, 'type': 'arc',
+                                'center': _pt(c.center), 'radius': round(float(c.radius), 8),
+                                'sp': _pt(c.start_point), 'ep': _pt(c.end_point)})
 
     # Line constraints
-    for i, L in enumerate(lines_data):
+    for L in lines_data:
         if abs(L['dy']) < EPS and L['length'] > EPS:
             constraints.append({'type': 'horizontal', 'curves': [L['idx']]})
         if abs(L['dx']) < EPS and L['length'] > EPS:
@@ -235,50 +235,49 @@ def infer_sketch_constraints(profile):
     # Coincident endpoints
     endpoints = []
     for L in lines_data:
-        endpoints.append((L['sp'], L['idx'], 'start'))
-        endpoints.append((L['ep'], L['idx'], 'end'))
+        endpoints.append((L['sp'], L['idx']))
+        endpoints.append((L['ep'], L['idx']))
     for C in circle_data:
         if C['type'] == 'arc':
-            endpoints.append((C['sp'], C['idx'], 'start'))
-            endpoints.append((C['ep'], C['idx'], 'end'))
+            endpoints.append((C['sp'], C['idx']))
+            endpoints.append((C['ep'], C['idx']))
 
     used = set()
     for i in range(len(endpoints)):
         if i in used:
             continue
-        group = [i]
+        group_curves = {endpoints[i][1]}
         for j in range(i + 1, len(endpoints)):
             if j in used:
                 continue
             pi, pj = endpoints[i][0], endpoints[j][0]
             if abs(pi[0]-pj[0]) < EPS and abs(pi[1]-pj[1]) < EPS:
-                if endpoints[i][1] != endpoints[j][1]:
-                    group.append(j)
+                if endpoints[j][1] != endpoints[i][1]:
+                    group_curves.add(endpoints[j][1])
                     used.add(j)
-        if len(group) >= 2:
-            curve_ids = list(set(endpoints[k][1] for k in group))
-            if len(curve_ids) >= 2:
-                constraints.append({
-                    'type': 'coincident', 'curves': curve_ids,
-                    'point': list(endpoints[i][0])
-                })
+        if len(group_curves) >= 2:
+            constraints.append({
+                'type': 'coincident',
+                'curves': sorted(group_curves),
+                'point': list(endpoints[i][0])
+            })
 
     return constraints
 
 
-# =============== sketch metadata extraction ===============
+# ===================== sketch metadata =====================
 
 def extract_sketch_metadata(extrude_op):
-    """Extract sketch curves and inferred constraints as metadata."""
+    """Extract sketch curve geometry and inferred constraints."""
     profile = copy(extrude_op.profile)
     profile.denormalize(extrude_op.sketch_size)
     sketch_plane = copy(extrude_op.sketch_plane)
     sketch_plane.origin = extrude_op.sketch_pos
 
     curves_meta = []
-    for loop_idx, loop in enumerate(profile.children):
-        for curve_idx, curve in enumerate(loop.children):
-            cm = {'loop': loop_idx, 'index_in_loop': curve_idx}
+    for li, loop in enumerate(profile.children):
+        for ci, curve in enumerate(loop.children):
+            cm = {'loop': li, 'index_in_loop': ci}
             if isinstance(curve, Line):
                 cm['type'] = 'Line'
                 cm['start'] = [round(float(x), 8) for x in curve.start_point]
@@ -314,11 +313,12 @@ def extract_sketch_metadata(extrude_op):
     }
 
 
-# =============== core export ===============
+# ===================== core export =====================
 
 def export_all_states(raw_data, output_dir, data_id=None, validate=False):
     """
-    Export STEP at every sequence step (Sketch + ExtrudeFeature).
+    Export STEP at every sequence step (sketch + extrude).
+
     Returns metadata dict.
     """
     os.makedirs(output_dir, exist_ok=True)
@@ -332,19 +332,19 @@ def export_all_states(raw_data, output_dir, data_id=None, validate=False):
         'states': [],
     }
 
-    body = None
-    exported = 0
-    state_num = 0
-
-    # Build index: sketch_entity_id -> extrude_entity_ids that reference it
+    # Index: sketch_entity_id -> list of extrude entity IDs that reference it
     sketch_to_extrude = {}
     for item in sequence:
         if item['type'] == 'ExtrudeFeature':
-            ext_entity = entities[item['entity']]
-            for prof_ref in ext_entity.get('profiles', []):
-                sid = prof_ref.get('sketch')
+            ext_ent = entities[item['entity']]
+            for pref in ext_ent.get('profiles', []):
+                sid = pref.get('sketch', '')
                 if sid:
                     sketch_to_extrude.setdefault(sid, []).append(item['entity'])
+
+    body = None
+    exported = 0
+    state_num = 0
 
     for seq_item in sequence:
         step_type = seq_item['type']
@@ -363,87 +363,76 @@ def export_all_states(raw_data, output_dir, data_id=None, validate=False):
         try:
             if step_type == 'Sketch':
                 sketch_entity = entity
-
                 builder = BRep_Builder()
                 sketch_compound = TopoDS_Compound()
                 builder.MakeCompound(sketch_compound)
 
                 all_sketch_meta = {}
-                has_edges = False
-
                 for profile_id, profile_data in sketch_entity.get('profiles', {}).items():
                     extrude_ids = sketch_to_extrude.get(entity_id, [])
-                    matched_ext_op = None
-
+                    matched_ops = None
                     for eid in extrude_ids:
                         ext_ent = entities[eid]
                         for pref in ext_ent.get('profiles', []):
                             if pref.get('sketch') == entity_id and pref.get('profile') == profile_id:
                                 try:
-                                    ops = Extrude.from_dict(raw_data, eid)
-                                    if ops:
-                                        matched_ext_op = ops[0]
+                                    matched_ops = Extrude.from_dict(raw_data, eid)
                                 except Exception:
                                     pass
                                 break
-                        if matched_ext_op:
+                        if matched_ops:
                             break
 
-                    if matched_ext_op:
-                        wireframe, _ = create_sketch_wireframe(matched_ext_op)
+                    if matched_ops:
+                        ext_op = matched_ops[0] if isinstance(matched_ops, list) else matched_ops
+                        wireframe = create_sketch_wireframe(ext_op)
                         builder.Add(sketch_compound, wireframe)
-                        has_edges = True
-                        all_sketch_meta[profile_id] = extract_sketch_metadata(matched_ext_op)
+                        all_sketch_meta[profile_id] = extract_sketch_metadata(ext_op)
                     else:
                         all_sketch_meta[profile_id] = {'note': 'orphan sketch (no matching extrude)'}
 
-                # Combine with existing body
                 if body is not None:
                     export_shape = make_compound_with_body(body, sketch_compound)
                 else:
                     export_shape = sketch_compound
 
                 step_path = os.path.join(output_dir, f"state_{state_num:04d}.step")
-                if has_edges:
-                    success = write_step(export_shape, step_path)
-                else:
-                    success = False
+                success = write_step(export_shape, step_path)
 
                 if success and os.path.exists(step_path):
-                    size_kb = os.path.getsize(step_path) / 1024
                     state['exported'] = True
                     state['step_file'] = f"state_{state_num:04d}.step"
-                    state['size_kb'] = round(size_kb, 1)
+                    state['size_kb'] = round(os.path.getsize(step_path) / 1024, 1)
                     exported += 1
                 else:
                     state['exported'] = False
-                    if not has_edges:
-                        state['error'] = 'no edges in sketch (orphan)'
-                    else:
-                        state['error'] = 'write_step failed'
+                    state['error'] = 'write_step failed for sketch wireframe'
 
                 state['sketch'] = all_sketch_meta
-                plane_data = sketch_entity.get('transform', {})
-                if plane_data:
-                    state['sketch_plane'] = {
-                        'origin': [plane_data['origin']['x'], plane_data['origin']['y'], plane_data['origin']['z']],
-                        'x_axis': [plane_data['x_axis']['x'], plane_data['x_axis']['y'], plane_data['x_axis']['z']],
-                        'y_axis': [plane_data['y_axis']['x'], plane_data['y_axis']['y'], plane_data['y_axis']['z']],
-                        'z_axis': [plane_data['z_axis']['x'], plane_data['z_axis']['y'], plane_data['z_axis']['z']],
-                    }
+                t = sketch_entity.get('transform', {})
+                state['sketch_plane'] = {
+                    'origin': [t.get('origin', {}).get(k, 0) for k in ('x', 'y', 'z')],
+                    'x_axis': [t.get('x_axis', {}).get(k, 0) for k in ('x', 'y', 'z')],
+                    'y_axis': [t.get('y_axis', {}).get(k, 0) for k in ('x', 'y', 'z')],
+                    'z_axis': [t.get('z_axis', {}).get(k, 0) for k in ('x', 'y', 'z')],
+                }
 
             elif step_type == 'ExtrudeFeature':
                 ext_entity = entity
 
                 try:
                     extrude_ops = Extrude.from_dict(raw_data, entity_id)
-                except Exception as e:
-                    extrude_ops = []
-                    state['parse_error'] = str(e)[:200]
+                except Exception as parse_err:
+                    state['exported'] = False
+                    state['error'] = f'parse error: {str(parse_err)[:200]}'
+                    state['operation'] = ext_entity.get('operation', '')
+                    metadata['states'].append(state)
+                    continue
 
                 if not extrude_ops:
+                    # Empty profiles list in the extrude entity
                     state['exported'] = False
-                    state['error'] = 'no profiles in extrude (empty profiles list)'
+                    state['error'] = 'extrude has no profiles'
                     state['operation'] = ext_entity.get('operation', '')
                     metadata['states'].append(state)
                     continue
@@ -454,8 +443,8 @@ def export_all_states(raw_data, output_dir, data_id=None, validate=False):
                         body = new_body
                     else:
                         op = ext_op.operation
-                        if op == EXTRUDE_OPERATIONS.index("NewBodyFeatureOperation") or \
-                           op == EXTRUDE_OPERATIONS.index("JoinFeatureOperation"):
+                        if op in (EXTRUDE_OPERATIONS.index("NewBodyFeatureOperation"),
+                                  EXTRUDE_OPERATIONS.index("JoinFeatureOperation")):
                             body = BRepAlgoAPI_Fuse(body, new_body).Shape()
                         elif op == EXTRUDE_OPERATIONS.index("CutFeatureOperation"):
                             body = BRepAlgoAPI_Cut(body, new_body).Shape()
@@ -470,21 +459,21 @@ def export_all_states(raw_data, output_dir, data_id=None, validate=False):
                 success = write_step(body, step_path)
 
                 if success and os.path.exists(step_path):
-                    size_kb = os.path.getsize(step_path) / 1024
                     state['exported'] = True
                     state['step_file'] = f"state_{state_num:04d}.step"
-                    state['size_kb'] = round(size_kb, 1)
+                    state['size_kb'] = round(os.path.getsize(step_path) / 1024, 1)
                     exported += 1
                 else:
                     state['exported'] = False
-                    state['error'] = 'write_step failed (invalid shape)'
+                    state['error'] = 'write_step failed (body may be invalid)'
 
                 state['operation'] = ext_entity.get('operation', '')
                 state['extent_type'] = ext_entity.get('extent_type', '')
-                state['extent_one'] = ext_entity.get('extent_one', {}).get('distance', {}).get('value', 0.0)
+                d1 = ext_entity.get('extent_one', {}).get('distance', {})
+                state['extent_one'] = d1.get('value', 0.0)
+                state['taper_angle'] = ext_entity.get('extent_one', {}).get('taper_angle', {}).get('value', 0.0)
                 if ext_entity.get('extent_type') == 'TwoSidesFeatureExtentType':
                     state['extent_two'] = ext_entity.get('extent_two', {}).get('distance', {}).get('value', 0.0)
-                state['taper_angle'] = ext_entity.get('extent_one', {}).get('taper_angle', {}).get('value', 0.0)
 
             else:
                 state['exported'] = False
@@ -506,18 +495,17 @@ def export_all_states(raw_data, output_dir, data_id=None, validate=False):
             'max': [bb['max_point']['x'], bb['max_point']['y'], bb['max_point']['z']],
         }
 
-    meta_path = os.path.join(output_dir, 'metadata.json')
-    with open(meta_path, 'w') as f:
+    with open(os.path.join(output_dir, 'metadata.json'), 'w') as f:
         json.dump(metadata, f, indent=2)
 
     return metadata
 
 
-# =============== batch processing ===============
+# ===================== batch processing =====================
 
 def process_json_file(json_path, output_dir, validate=False, quiet=False):
     data_id = os.path.splitext(os.path.basename(json_path))[0]
-    start_time = time.time()
+    t0 = time.time()
     result = {'data_id': data_id, 'json_path': json_path, 'status': 'unknown'}
 
     try:
@@ -549,16 +537,21 @@ def process_json_file(json_path, output_dir, validate=False, quiet=False):
 
         # Count constraints
         total_c = 0
+        c_types = {}
         for st in metadata['states']:
             if st['type'] == 'Sketch' and 'sketch' in st:
-                for pid, sd in st['sketch'].items():
-                    if isinstance(sd, dict) and 'constraints' in sd:
-                        total_c += len(sd['constraints'])
+                for pid, sdata in st['sketch'].items():
+                    if isinstance(sdata, dict) and 'constraints' in sdata:
+                        for c in sdata['constraints']:
+                            total_c += 1
+                            c_types[c['type']] = c_types.get(c['type'], 0) + 1
         result['total_constraints'] = total_c
+        result['constraint_types'] = c_types
 
         if not quiet:
-            print(f"    ✓ {metadata['total_exported']}/{metadata['total_states']} states "
-                  f"({result.get('total_size_kb', 0):.1f} KB, {total_c} constraints)")
+            cs = ', '.join(f'{k}:{v}' for k, v in sorted(c_types.items())) if c_types else 'none'
+            print(f"    ✓ {metadata['total_exported']}/{metadata['total_states']} exported "
+                  f"({result.get('total_size_kb', 0):.1f} KB) | constraints: {cs}")
 
     except Exception as e:
         result['status'] = 'error'
@@ -566,18 +559,18 @@ def process_json_file(json_path, output_dir, validate=False, quiet=False):
         if not quiet:
             print(f"    ✗ Error: {e}")
 
-    result['time_seconds'] = round(time.time() - start_time, 3)
+    result['time_seconds'] = round(time.time() - t0, 3)
     return result
 
 
-# =============== CLI ===============
+# ===================== CLI =====================
 
 def main():
-    parser = argparse.ArgumentParser(description='CAD-Steps: local STEP export with sketch states + constraints')
-    parser.add_argument('--input', type=str)
-    parser.add_argument('--input-dir', type=str)
+    parser = argparse.ArgumentParser(description='CAD-Steps: export all intermediate states from DeepCAD JSON')
+    parser.add_argument('--input', type=str, help='Single JSON file')
+    parser.add_argument('--input-dir', type=str, help='Directory of JSON files')
     parser.add_argument('--output', type=str, default='/tmp/cad_steps_v2')
-    parser.add_argument('--test', action='store_true')
+    parser.add_argument('--test', action='store_true', help='Quick test with 10 models')
     parser.add_argument('--limit', type=int, default=None)
     parser.add_argument('--validate', action='store_true')
     args = parser.parse_args()
@@ -589,34 +582,32 @@ def main():
         if not os.path.exists(data_dir):
             print(f"Data not found at {data_dir}")
             return
-
-        json_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.json')])[:10]
+        json_files = sorted(f for f in os.listdir(data_dir) if f.endswith('.json'))[:10]
         print(f"Testing {len(json_files)} models\n")
 
         t0 = time.time()
-        results = []
-        for jf in json_files:
-            r = process_json_file(os.path.join(data_dir, jf), args.output, validate=args.validate)
-            results.append(r)
-
+        results = [process_json_file(os.path.join(data_dir, jf), args.output, validate=args.validate)
+                    for jf in json_files]
         elapsed = time.time() - t0
+
         ok = [r for r in results if r['status'] == 'success']
         err = [r for r in results if r['status'] != 'success']
 
         print(f"\n{'='*60}")
-        print(f"Done: {len(ok)}/{len(results)} succeeded, {elapsed:.1f}s")
+        print(f"Done: {len(ok)}/{len(results)} ok, {elapsed:.1f}s")
         if ok:
             total_files = sum(r.get('step_files', 0) for r in ok)
             total_kb = sum(r.get('total_size_kb', 0) for r in ok)
-            total_states = sum(r.get('total_states', 0) for r in ok)
-            total_exported = sum(r.get('states_exported', 0) for r in ok)
-            total_constraints = sum(r.get('total_constraints', 0) for r in ok)
+            total_c = sum(r.get('total_constraints', 0) for r in ok)
             avg_t = sum(r['time_seconds'] for r in ok) / len(ok)
-            print(f"  States: {total_exported}/{total_states} exported")
-            print(f"  STEP files: {total_files}")
-            print(f"  Size: {total_kb:.1f} KB")
-            print(f"  Avg time/model: {avg_t:.3f}s")
-            print(f"  Inferred constraints: {total_constraints}")
+            agg_c = {}
+            for r in ok:
+                for k, v in r.get('constraint_types', {}).items():
+                    agg_c[k] = agg_c.get(k, 0) + v
+            print(f"  STEP files: {total_files}, Size: {total_kb:.1f} KB, Avg: {avg_t:.3f}s/model")
+            print(f"  Constraints: {total_c}")
+            for k, v in sorted(agg_c.items(), key=lambda x: -x[1]):
+                print(f"    {k}: {v}")
         if err:
             for r in err:
                 print(f"  ERR {r['data_id']}: {r.get('error', '?')[:120]}")
@@ -626,7 +617,7 @@ def main():
         print(json.dumps(r, indent=2))
 
     elif args.input_dir:
-        json_files = sorted([f for f in os.listdir(args.input_dir) if f.endswith('.json')])
+        json_files = sorted(f for f in os.listdir(args.input_dir) if f.endswith('.json'))
         if args.limit:
             json_files = json_files[:args.limit]
         print(f"Processing {len(json_files)} files\n")
@@ -634,12 +625,10 @@ def main():
         t0 = time.time()
         results = []
         for i, jf in enumerate(json_files):
-            if (i + 1) % 50 == 0 or i == 0:
-                print(f"--- [{i+1}/{len(json_files)}] ---")
-            r = process_json_file(
-                os.path.join(args.input_dir, jf), args.output,
-                validate=args.validate, quiet=(len(json_files) > 20)
-            )
+            if (i+1) % 50 == 0 or i == 0:
+                print(f"--- {i+1}/{len(json_files)} ---")
+            r = process_json_file(os.path.join(args.input_dir, jf), args.output,
+                                  validate=args.validate, quiet=(len(json_files) > 20))
             results.append(r)
 
         elapsed = time.time() - t0
@@ -651,21 +640,24 @@ def main():
         if ok:
             total_files = sum(r.get('step_files', 0) for r in ok)
             total_kb = sum(r.get('total_size_kb', 0) for r in ok)
-            total_states = sum(r.get('total_states', 0) for r in ok)
-            total_exported = sum(r.get('states_exported', 0) for r in ok)
-            total_constraints = sum(r.get('total_constraints', 0) for r in ok)
-            print(f"  States: {total_exported}/{total_states} exported")
-            print(f"  STEP files: {total_files}")
-            print(f"  Size: {total_kb/1024:.1f} MB")
-            print(f"  Constraints: {total_constraints}")
+            total_c = sum(r.get('total_constraints', 0) for r in ok)
+            print(f"  STEP files: {total_files}, Size: {total_kb/1024:.1f} MB, Constraints: {total_c}")
+
+            agg_c = {}
+            for r in ok:
+                for k, v in r.get('constraint_types', {}).items():
+                    agg_c[k] = agg_c.get(k, 0) + v
+            for k, v in sorted(agg_c.items(), key=lambda x: -x[1]):
+                print(f"    {k}: {v}")
+
         if err:
-            err_types = {}
+            err_msgs = {}
             for r in err:
                 msg = r.get('error', 'unknown')[:60]
-                err_types[msg] = err_types.get(msg, 0) + 1
-            print(f"  Errors ({len(err)}):")
-            for msg, ct in sorted(err_types.items(), key=lambda x: -x[1]):
-                print(f"    [{ct}x] {msg}")
+                err_msgs[msg] = err_msgs.get(msg, 0) + 1
+            print(f"\n  Errors ({len(err)}):")
+            for msg, cnt in sorted(err_msgs.items(), key=lambda x: -x[1]):
+                print(f"    [{cnt}x] {msg}")
     else:
         parser.print_help()
 
