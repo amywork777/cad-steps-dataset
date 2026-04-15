@@ -107,7 +107,7 @@ def main():
     completed = 0
     succeeded = 0
     failed = 0
-    total_files = 0
+    total_step_files = 0
     total_size_kb = 0
     total_constraints = 0
     total_sketch_states = 0
@@ -130,11 +130,11 @@ def main():
                 result = future.result()
                 if result["status"] == "success":
                     succeeded += 1
-                    total_files += result.get("step_files", 0)
+                    total_step_files += result.get("step_files", 0)
                     total_size_kb += result.get("total_size_kb", 0)
                     total_constraints += result.get("total_constraints", 0)
-                    total_sketch_states += result.get("num_sketch_states", 0)
-                    total_extrude_states += result.get("num_extrude_states", 0)
+                    total_sketch_states += result.get("num_sketches", 0)
+                    total_extrude_states += result.get("num_extrudes", 0)
                 else:
                     failed += 1
 
@@ -145,7 +145,7 @@ def main():
                 if completed % 50 == 0 or completed == total:
                     print(f"  [{completed}/{total}] ✓{succeeded} ✗{failed} | "
                           f"{rate:.0f}/min | "
-                          f"files:{total_files} ({total_sketch_states}sk+{total_extrude_states}ex) | "
+                          f"files:{total_step_files} ({total_sketch_states}sk+{total_extrude_states}ex) | "
                           f"constraints:{total_constraints} | "
                           f"size:{total_size_kb/1024:.1f}MB | "
                           f"ETA:{eta_s:.0f}s")
@@ -164,13 +164,13 @@ def main():
     print(f"Processed: {completed}")
     print(f"  ✓ Success: {succeeded} ({succeeded/completed*100:.1f}%)")
     print(f"  ✗ Failed: {failed}")
-    print(f"  STEP files: {total_files} (sketches: {total_sketch_states}, extrudes: {total_extrude_states})")
+    print(f"  STEP files: {total_step_files} (sketches: {total_sketch_states}, extrudes: {total_extrude_states})")
     print(f"  Total constraints: {total_constraints}")
     print(f"  Total size: {total_size_kb/1024:.1f} MB")
 
     if succeeded:
         avg_time = total_time / succeeded
-        avg_files = total_files / succeeded
+        avg_files = total_step_files / succeeded
         avg_size = total_size_kb / succeeded
         avg_constraints = total_constraints / succeeded
 
@@ -198,7 +198,7 @@ def main():
             "total": completed,
             "succeeded": succeeded,
             "failed": failed,
-            "total_files": total_files,
+            "total_step_files": total_step_files,
             "total_sketch_states": total_sketch_states,
             "total_extrude_states": total_extrude_states,
             "total_constraints": total_constraints,
