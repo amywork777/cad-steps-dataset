@@ -154,7 +154,7 @@ def make_compound_with_body(body, sketch_compound):
     return compound
 
 
-def write_step(shape, filepath, compress=False):
+def write_step(shape, filepath, compress=True):
     if shape is None:
         return False
     try:
@@ -338,7 +338,7 @@ def extract_sketch_metadata(extrude_op):
 
 # ===================== core export =====================
 
-def export_all_states(raw_data, output_dir, data_id=None, validate=False, compress=False):
+def export_all_states(raw_data, output_dir, data_id=None, validate=False, compress=True):
     """
     Export STEP at every sequence step (sketch + extrude).
 
@@ -528,7 +528,7 @@ def export_all_states(raw_data, output_dir, data_id=None, validate=False, compre
 
 # ===================== batch processing =====================
 
-def process_json_file(json_path, output_dir, validate=False, quiet=False, compress=False):
+def process_json_file(json_path, output_dir, validate=False, quiet=False, compress=True):
     data_id = os.path.splitext(os.path.basename(json_path))[0]
     t0 = time.time()
     result = {'data_id': data_id, 'json_path': json_path, 'status': 'unknown'}

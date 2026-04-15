@@ -71,7 +71,7 @@ def worker_fn(args):
     old_stderr = sys.stderr
     sys.stderr = io.StringIO()
     try:
-        result = process_json_file(json_path, output_dir, quiet=True, compress=True)
+        result = process_json_file(json_path, output_dir, quiet=True)
     except Exception as e:
         result = {
             'data_id': os.path.splitext(os.path.basename(json_path))[0],
