@@ -89,16 +89,55 @@ CAD-Steps focuses on **feature-based modeling**, specifically the sketch-and-ext
 
 ## 3. Related Work
 
-### CAD Datasets
-- ABC Dataset (Koch et al., 2019): 1M models, final geometry only
-- DeepCAD (Wu et al., 2021): 178K models, symbolic sequences, no intermediate geometry
-- Fusion 360 Gallery: ~20K models with construction history
-- SketchGraphs: 2D sketch constraint data
+### 3.1 CAD Datasets
 
-### Intermediate Supervision in Other Domains
-- Mathematics: Chain-of-thought, step-by-step solutions
-- Robotics: Full trajectory supervision vs. goal-only
-- Code: Execution traces, debugging data
+| Dataset | Size | Format | Intermediate States |
+|---------|------|--------|---------------------|
+| ABC Dataset [1] | 1M | STEP/OBJ | Final only |
+| DeepCAD [2] | 178K | JSON sequences | Operations only |
+| Fusion 360 Gallery [3] | 8.6K | Construction history | Operations only |
+| SketchGraphs [4] | 15M | Constraint graphs | 2D sketches only |
+| **CAD-Steps (ours)** | 215K | STEP files | **Full 3D geometry** |
+
+The key gap: existing datasets provide either final geometry (ABC) or symbolic operations (DeepCAD), but not intermediate 3D geometry at each step.
+
+### 3.2 CAD Generation Approaches
+
+**Sequence-based / Feature-based:**
+- **DeepCAD** [2]: Transformer autoencoder on sketch-extrude sequences. First generative model for CAD operations.
+- **SkexGen** [12]: Disentangled codebooks for sketch and extrude, improved diversity.
+- **Vitruvion** [13]: Generative model for parametric CAD sketches with constraints.
+
+**Direct B-Rep Generation:**
+- **SolidGen** [14]: Autoregressive B-Rep synthesis, first to generate CAD directly in boundary representation.
+- **BRepGen** [15]: Diffusion on structured latent geometry trees. State-of-the-art, generates complex curved surfaces.
+- **BRepDiff** [16]: Single-stage B-Rep diffusion, faster than BRepGen.
+- **HoLa** [17]: Holistic latent representation for B-Rep generation.
+- **DTGBrepGen** [18]: Decoupled topology-geometry generation.
+
+**CSG-based:**
+- **CSGNet** [19]: Neural shape parser for constructive solid geometry.
+- **CSG-Stump** [20]: Learning-friendly CSG representation.
+- **DualCSG** [21]: Learning dual CSG trees for compact modeling.
+
+**LLM-based (emerging):**
+- **CAD-Llama** [22]: Leveraging LLMs for parametric 3D modeling.
+- **FlexCAD** [23]: Unified controllable CAD generation with fine-tuned LLMs.
+- **Seek-CAD** [24]: Training-free CAD generation using DeepSeek-R1 with Chain-of-Thought.
+- **Text2CAD** [25]: Text to 3D CAD via technical drawings.
+
+### 3.3 Research Groups
+
+- **Autodesk AI Lab**: World's leading publisher on generative CAD. Key contributors: Karl Willis, Joe Lambourne, Pradeep Jayaraman.
+- **Columbia Graphics (Changxi Zheng)**: DeepCAD, foundational CAD generation work.
+- **Simon Fraser (Yasutaka Furukawa)**: BRepGen, direct B-Rep generation.
+- **Princeton LIPS**: SketchGraphs, Vitruvion, constraint-based sketch generation.
+- **MIT CSAIL (Wojciech Matusik)**: Fusion 360 Gallery, programmatic CAD construction.
+
+### 3.4 Intermediate Supervision in Other Domains
+- **Mathematics**: Chain-of-thought prompting shows step-by-step reasoning outperforms direct answers [9].
+- **Robotics**: Full trajectory supervision beats goal-only supervision.
+- **Code**: Execution traces improve debugging and program synthesis.
 
 ## 4. Dataset Construction
 
@@ -278,7 +317,7 @@ CAD-Steps fills a critical gap in CAD machine learning by providing intermediate
 
 [3] K. D. D. Willis, Y. Pu, J. Luo, H. Chu, T. Du, J. G. Lambourne, A. Solar-Lezama, and W. Matusik. "Fusion 360 Gallery: A Dataset and Environment for Programmatic CAD Construction from Human Design Sequences." SIGGRAPH 2021.
 
-[4] A. Seff, Y. Ovadia, W. Zhou, and R. P. Adams. "SketchGraphs: A Large-Scale Dataset for Modeling Relational Geometry in Computer-Aided Design." ICML 2020 Workshop on Object-Oriented Learning.
+[4] A. Seff, Y. Ovadia, W. Zhou, and R. P. Adams. "SketchGraphs: A Large-Scale Dataset for Modeling Relational Geometry in Computer-Aided Design." ICML 2020 Workshop.
 
 [5] J. J. Park, P. Florence, J. Straub, R. Newcombe, and S. Lovegrove. "DeepSDF: Learning Continuous Signed Distance Functions for Shape Representation." CVPR 2019.
 
@@ -293,3 +332,31 @@ CAD-Steps fills a critical gap in CAD machine learning by providing intermediate
 [10] Open CASCADE Technology. https://dev.opencascade.org/
 
 [11] CadQuery. https://github.com/CadQuery/cadquery
+
+[12] X. Xu, K. D. D. Willis, J. G. Lambourne, C.-F. Cheng, P. K. Jayaraman, and Y. Furukawa. "SkexGen: Autoregressive Generation of CAD Construction Sequences with Disentangled Codebooks." ICML 2022.
+
+[13] A. Seff, W. Zhou, N. Richardson, and R. P. Adams. "Vitruvion: A Generative Model of Parametric CAD Sketches." ICLR 2022.
+
+[14] P. K. Jayaraman, J. G. Lambourne, N. Desai, K. D. D. Willis, A. Sanghi, and N. J. W. Morris. "SolidGen: An Autoregressive Model for Direct B-rep Synthesis." TMLR 2023.
+
+[15] X. Xu, J. G. Lambourne, P. K. Jayaraman, Z. Wang, K. D. D. Willis, and Y. Furukawa. "BrepGen: A B-rep Generative Diffusion Model with Structured Latent Geometry." SIGGRAPH 2024.
+
+[16] M. Lee, et al. "BrepDiff: Single-Stage B-rep Diffusion Model." SIGGRAPH 2025.
+
+[17] Y. Liu, et al. "HoLa: B-Rep Generation using a Holistic Latent Representation." SIGGRAPH 2025.
+
+[18] J. Li, Y. Fu, and F. Chen. "DTGBrepGen: A Novel B-rep Generative Model through Decoupling Topology and Geometry." CVPR 2025.
+
+[19] G. Sharma, R. Goyal, D. Liu, E. Kalogerakis, and S. Maji. "CSGNet: Neural Shape Parser for Constructive Solid Geometry." CVPR 2018.
+
+[20] D. Ren, J. Zheng, J. Cai, J. Li, H. Jiang, Z. Cai, J. Zhang, L. Pan, M. Zhang, H. Zhao, and S. Liu. "CSG-Stump: A Learning Friendly CSG-Like Representation for Interpretable Shape Parsing." ICCV 2021.
+
+[21] Q. Yu, et al. "DualCSG: Learning Dual CSG Trees for General and Compact CAD Modeling." arXiv 2023.
+
+[22] Y. Li, et al. "CAD-Llama: Leveraging Large Language Models for Computer-Aided Design Parametric 3D Modeling." CVPR 2025.
+
+[23] Z. Zhang, et al. "FlexCAD: Unified and Versatile Controllable CAD Generation with Fine-tuned Large Language Models." ICLR 2025.
+
+[24] "Seek-CAD: A Self-refined Generative Modeling for 3D Parametric CAD Using Local Inference via DeepSeek." arXiv 2026.
+
+[25] M. A. Sadil, et al. "Text2CAD: Text to 3D CAD Generation via Technical Drawings." NeurIPS 2024.
