@@ -194,17 +194,24 @@ def _pt(p):
     return (round(float(p[0]), 8), round(float(p[1]), 8))
 
 
+MAX_CURVES_FOR_CONSTRAINTS = 500  # Skip pairwise constraint inference for huge sketches
+
 def infer_sketch_constraints(profile):
     """Infer geometric constraints from sketch curve geometry.
 
     DeepCAD JSON has no explicit constraints, but we detect:
       coincident, horizontal, vertical, parallel, perpendicular,
       equal_length, concentric, equal_radius
+    
+    Pairwise checks are O(n²), so we skip them for sketches with >500 curves.
     """
     constraints = []
     all_curves = []
     for loop in profile.children:
         all_curves.extend(loop.children)
+    
+    if len(all_curves) > MAX_CURVES_FOR_CONSTRAINTS:
+        return []  # Skip constraint inference for very complex sketches
 
     lines_data = []
     circle_data = []
@@ -520,8 +527,20 @@ def export_all_states(raw_data, output_dir, data_id=None, validate=False, compre
             'max': [bb['max_point']['x'], bb['max_point']['y'], bb['max_point']['z']],
         }
 
-    with open(os.path.join(output_dir, 'metadata.json'), 'w') as f:
-        json.dump(metadata, f, indent=2)
+    meta_path = os.path.join(output_dir, 'metadata.json')
+    meta_str = json.dumps(metadata, separators=(',', ':'))
+    # Safety: cap metadata at 1MB to prevent disk blowup from edge cases
+    if len(meta_str) > 1_000_000:
+        # Strip constraint data to fit
+        for s in metadata.get('states', []):
+            sk = s.get('sketch', {})
+            for k, v in sk.items():
+                if isinstance(v, dict) and 'constraints' in v:
+                    v['constraints'] = []
+                    v['constraints_note'] = 'stripped (too large)'
+        meta_str = json.dumps(metadata, separators=(',', ':'))
+    with open(meta_path, 'w') as f:
+        f.write(meta_str)
 
     return metadata
 
