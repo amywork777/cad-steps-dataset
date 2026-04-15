@@ -154,13 +154,36 @@ def make_compound_with_body(body, sketch_compound):
     return compound
 
 
-def write_step(shape, filepath):
+def write_step(shape, filepath, compress=False):
     if shape is None:
         return False
     try:
-        writer = STEPControl_Writer()
-        writer.Transfer(shape, STEPControl_AsIs)
-        return writer.Write(filepath) == 1
+        if compress:
+            import gzip as _gzip
+            import tempfile as _tempfile
+            fd, tmp_path = _tempfile.mkstemp(suffix='.step')
+            os.close(fd)
+            try:
+                writer = STEPControl_Writer()
+                writer.Transfer(shape, STEPControl_AsIs)
+                status = writer.Write(tmp_path)
+                if status != 1:
+                    os.unlink(tmp_path)
+                    return False
+                gz_path = filepath if filepath.endswith('.gz') else filepath + '.gz'
+                with open(tmp_path, 'rb') as f_in:
+                    with _gzip.open(gz_path, 'wb', compresslevel=6) as f_out:
+                        f_out.write(f_in.read())
+                os.unlink(tmp_path)
+                return True
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
+        else:
+            writer = STEPControl_Writer()
+            writer.Transfer(shape, STEPControl_AsIs)
+            return writer.Write(filepath) == 1
     except Exception:
         return False
 
@@ -315,7 +338,7 @@ def extract_sketch_metadata(extrude_op):
 
 # ===================== core export =====================
 
-def export_all_states(raw_data, output_dir, data_id=None, validate=False):
+def export_all_states(raw_data, output_dir, data_id=None, validate=False, compress=False):
     """
     Export STEP at every sequence step (sketch + extrude).
 
@@ -396,12 +419,13 @@ def export_all_states(raw_data, output_dir, data_id=None, validate=False):
                 else:
                     export_shape = sketch_compound
 
-                step_path = os.path.join(output_dir, f"state_{state_num:04d}.step")
-                success = write_step(export_shape, step_path)
+                ext = ".step.gz" if compress else ".step"
+                step_path = os.path.join(output_dir, f"state_{state_num:04d}{ext}")
+                success = write_step(export_shape, step_path, compress=compress)
 
                 if success and os.path.exists(step_path):
                     state['exported'] = True
-                    state['step_file'] = f"state_{state_num:04d}.step"
+                    state['step_file'] = f"state_{state_num:04d}{ext}"
                     state['size_kb'] = round(os.path.getsize(step_path) / 1024, 1)
                     exported += 1
                 else:
@@ -455,12 +479,13 @@ def export_all_states(raw_data, output_dir, data_id=None, validate=False):
                     analyzer = BRepCheck_Analyzer(body)
                     state['valid'] = analyzer.IsValid()
 
-                step_path = os.path.join(output_dir, f"state_{state_num:04d}.step")
-                success = write_step(body, step_path)
+                ext = ".step.gz" if compress else ".step"
+                step_path = os.path.join(output_dir, f"state_{state_num:04d}{ext}")
+                success = write_step(body, step_path, compress=compress)
 
                 if success and os.path.exists(step_path):
                     state['exported'] = True
-                    state['step_file'] = f"state_{state_num:04d}.step"
+                    state['step_file'] = f"state_{state_num:04d}{ext}"
                     state['size_kb'] = round(os.path.getsize(step_path) / 1024, 1)
                     exported += 1
                 else:
@@ -503,7 +528,7 @@ def export_all_states(raw_data, output_dir, data_id=None, validate=False):
 
 # ===================== batch processing =====================
 
-def process_json_file(json_path, output_dir, validate=False, quiet=False):
+def process_json_file(json_path, output_dir, validate=False, quiet=False, compress=False):
     data_id = os.path.splitext(os.path.basename(json_path))[0]
     t0 = time.time()
     result = {'data_id': data_id, 'json_path': json_path, 'status': 'unknown'}
@@ -520,7 +545,7 @@ def process_json_file(json_path, output_dir, validate=False, quiet=False):
             print(f"  {data_id}: {len(seq)} steps ({n_sketch}S + {n_ext}E)")
 
         model_dir = os.path.join(output_dir, data_id)
-        metadata = export_all_states(raw_data, model_dir, data_id=data_id, validate=validate)
+        metadata = export_all_states(raw_data, model_dir, data_id=data_id, validate=validate, compress=compress)
 
         result['status'] = 'success'
         result['num_steps'] = len(seq)
@@ -530,7 +555,7 @@ def process_json_file(json_path, output_dir, validate=False, quiet=False):
         result['total_states'] = metadata['total_states']
 
         if os.path.exists(model_dir):
-            step_files = [f for f in os.listdir(model_dir) if f.endswith('.step')]
+            step_files = [f for f in os.listdir(model_dir) if f.endswith('.step') or f.endswith('.step.gz')]
             total_size = sum(os.path.getsize(os.path.join(model_dir, f)) for f in step_files)
             result['total_size_kb'] = round(total_size / 1024, 1)
             result['step_files'] = len(step_files)
