@@ -73,13 +73,15 @@ For each model:
 | Total size (compressed) | 16 GB |
 
 ### 4.2 Operation Distribution
-- Sketch: 45%
-- Extrude: 40%
-- Revolve: 8%
-- Other: 7%
+- Sketch: 51.2%
+- Extrude: 48.8%
 
-### 4.3 Geometry Complexity
-[TODO: Add analysis of face counts, volume distributions]
+Note: The DeepCAD source data primarily contains sketch-and-extrude workflows. More complex operations (revolve, sweep, loft) are underrepresented.
+
+### 4.3 Step Distribution
+- Min steps: 2
+- Max steps: 50
+- Most models follow a simple pattern: sketch → extrude → (optional refinement)
 
 ## 5. Benchmark Tasks
 
